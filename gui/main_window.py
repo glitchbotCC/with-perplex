@@ -518,10 +518,12 @@ class MainWindow:
                 self.root.after(200, self._set_initial_sash)
 
     def setup_menu(self):
+        
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Save Settings Now", command=self.save_state)
         file_menu.add_command(label="Import Config", command=self.import_config, accelerator="Ctrl+I")
         file_menu.add_command(label="Export Config", command=self.export_config, accelerator="Ctrl+E")
         file_menu.add_command(label="Save Log", command=self.save_log_manually, accelerator="Ctrl+Shift+S")
@@ -1058,8 +1060,15 @@ class MainWindow:
             self.log(f"Aux control renamed to '{new_name}'.")
 
     def save_state(self):
+        """Prepares a clean copy of the data and saves it to the settings file."""
+        # Create a deep copy of the valves list to avoid modifying the live UI data.
         valves_to_save = [v.copy() for v in self.valves]
-        for v in valves_to_save: v.pop("timer_var", None)
+        
+        # IMPORTANT: Remove the non-serializable 'timer_var' from each valve's copy.
+        for v in valves_to_save:
+            v.pop("timer_var", None)
+            
+        # Now, set the sanitized data in the settings object.
         self.settings.set("valves", valves_to_save)
         self.settings.set("aux_controls", self.aux_controls)
         self.settings.set("automation_rules", self.automation_rules)
@@ -1319,3 +1328,6 @@ class MainWindow:
             details = f"{schedule_obj['action']} at {schedule_obj['time']}"
         if schedule_obj.get('skip_rainy'): details += " (☔ Skip if Rainy)"
         return details
+    # In main_window.py
+
+    

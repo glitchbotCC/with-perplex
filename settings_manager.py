@@ -41,21 +41,20 @@ class PersistentSettings:
             try:
                 with open(self.filename, "r", encoding='utf-8') as f:
                     loaded_data = json.load(f)
+                    # Start with the default schema, then update with loaded data
                     self.data = default_settings.copy()
                     self.data.update(loaded_data)
-            except json.JSONDecodeError:
-                print(f"Error: Corrupt JSON data in {self.filename}. Using default settings.")
-                self.data = default_settings
-            except FileNotFoundError:
-                print(f"Error: Settings file {self.filename} not found. Using default settings.")
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                print(f"Error loading settings file ({e}). Using default settings.")
                 self.data = default_settings
             except Exception as e:
-                print(f"An unexpected error occurred while loading settings from {self.filename}: {e}. Using defaults.")
+                print(f"An unexpected error occurred while loading settings: {e}. Using defaults.")
                 self.data = default_settings
         else:
             print(f"Settings file {self.filename} does not exist. Using default settings.")
             self.data = default_settings
 
+        # Ensure all default keys exist in the loaded data, adding any that are missing
         for key, value in default_settings.items():
             self.data.setdefault(key, value)
 
@@ -70,8 +69,6 @@ class PersistentSettings:
     def get(self, key, default_override=None):
         """
         Retrieves a setting value by its key.
-        - If 'default_override' is provided, it's used if the key is not found in self.data.
-        - Otherwise, the default value for that key from `_get_default_settings` is used.
         """
         default_value_from_schema = self._get_default_settings().get(key)
         if default_override is not None:

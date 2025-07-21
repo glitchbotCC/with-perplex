@@ -12,8 +12,12 @@ def resource_path(relative_path):
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
-        # Not running in a PyInstaller bundle, use the script's directory
-        base_path = os.path.abspath(".")
+        # Get the directory of the currently running script and go up to the project root.
+        # __file__ is the path to this file (utils.py)
+        # The first dirname gets the 'smart_farm' directory.
+        # The second dirname gets the project root folder (e.g., 'with perplex').
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
     return os.path.join(base_path, relative_path)
 
 def format_duration(seconds):

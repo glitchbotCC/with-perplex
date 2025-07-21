@@ -3,8 +3,9 @@
 # --- Global Application Constants ---
 APP_NAME = "Smart Farm Valve Control (Pi Edition)"
 APP_VERSION = "4.3.0-queuing"
+# CHANGE THIS LINE BACK TO THE DEFAULT
 SETTINGS_FILE = "valve_app_settings.json"
-MAX_VALVES = 5
+MAX_VALVES = 10
 SCHEDULER_CHECK_INTERVAL_S = 30
 # IMPORTANT: Replace with your own key from https://openweathermap.org/
 API_KEY = "d7b8a4a58f2d8f3f8b9e8a7b9c8d7e6f"
