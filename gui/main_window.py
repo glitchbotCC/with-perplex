@@ -11,6 +11,7 @@ import time
 import re
 import random
 import requests
+import hashlib
 
 # Local application imports
 from .. import constants, utils
@@ -22,6 +23,7 @@ from .settings_windows import AppSettingsWindow, ValveSettingsWindow
 from .scheduler_window import SchedulerWindow
 from .automation_window import AutomationWindow
 from .log_window import LogWindow
+from .auth_dialog import AuthDialog
 
 
 class MainWindow:
@@ -33,31 +35,30 @@ class MainWindow:
         self.hardware = HardwareManager()
 
         # --- Load settings and initialize state ---
-        # The 'logs' list MUST be created first, as other functions like _migrate_schedule_data call self.log()
         self.logs = self.settings.get("logs", [])
         
         self.theme = self.settings.get("theme", "dark")
         self.location = self.settings.get("location", "London,UK")
         self.api_key = constants.API_KEY
+        
+        # Auth and Lock state
+        self.is_config_locked = tk.BooleanVar(value=self.settings.get("config_locked", False))
+        self.admin_user = self.settings.get("admin_user")
+        self.admin_pass_hash = self.settings.get("admin_pass_hash")
 
-         # This section now safely loads data from your settings file
+        # This section now safely loads data from your settings file
         self.valves = self.settings.get("valves", [])
         self.aux_controls = self.settings.get("aux_controls", [])
         self.automation_rules = self.settings.get("automation_rules", [])
         self.schedule_history = self.settings.get("schedule_history", [])
 
-        # Now that self.logs exists, it's safe to run the migration
         self._migrate_schedule_data()
 
-        # CRITICAL: Initialize dynamic valve data that isn't saved in the file
         for v in self.valves:
             self._initialize_valve_data(v)
 
-        # Initialize Aux controls if they are invalid or missing
         default_aux_controls = [{"id": f"aux_{i}", "name": f"AUX {i+1}", "pin": pin, "status": False, "schedules": []} for i, pin in enumerate(constants.EXTRA_GPIO_PINS)]
         loaded_aux = self.settings.get("aux_controls")
-
-        # More robust check: verify that the actual pin numbers match the constants
         valid_pins = True
         if isinstance(loaded_aux, list) and len(loaded_aux) == len(constants.EXTRA_GPIO_PINS):
             loaded_pin_set = {c.get("pin") for c in loaded_aux}
@@ -66,7 +67,6 @@ class MainWindow:
                 valid_pins = False
         else:
             valid_pins = False
-
         if valid_pins:
             self.aux_controls = loaded_aux
         else:
@@ -114,6 +114,72 @@ class MainWindow:
         self.update_location_data()
         self.check_automation_rules()
         self.log("Application initialized successfully.")
+        self.update_lock_status_ui()
+
+    def _hash_password(self, password):
+        """Hashes a password using SHA-256."""
+        return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+    def toggle_configuration_lock(self):
+        """Handles the logic for locking or unlocking the configuration."""
+        if self.is_config_locked.get():
+            # UNLOCKING
+            if not self.admin_user:
+                self.notify("No credentials set. Cannot unlock.", 4000)
+                return
+
+            dialog = AuthDialog(self, is_setting_credentials=False)
+            creds = dialog.result
+
+            if creds and creds["username"] == self.admin_user and self._hash_password(creds["password"]) == self.admin_pass_hash:
+                self.is_config_locked.set(False)
+                self.settings.set("config_locked", False)
+                self.log("Configuration Unlocked.")
+                self.notify("Configuration Unlocked.", 3000)
+            elif creds:
+                messagebox.showerror("Authentication Failed", "Invalid username or password.", parent=self.root)
+                self.log("Failed unlock attempt.")
+        else:
+            # LOCKING
+            if not self.admin_user:
+                if messagebox.askyesno("Set Credentials", "No admin credentials found. Do you want to set them now to lock the configuration?", parent=self.root):
+                    dialog = AuthDialog(self, is_setting_credentials=True)
+                    creds = dialog.result
+                    if creds:
+                        self.admin_user = creds["username"]
+                        self.admin_pass_hash = self._hash_password(creds["password"])
+                        self.settings.set("admin_user", self.admin_user)
+                        self.settings.set("admin_pass_hash", self.admin_pass_hash)
+                        self.log("Admin credentials set.")
+                    else:
+                        return # User cancelled setting credentials
+            
+            self.is_config_locked.set(True)
+            self.settings.set("config_locked", True)
+            self.log("Configuration Locked.")
+            self.notify("Configuration Locked.", 3000)
+        
+        self.update_lock_status_ui()
+        
+    def update_lock_status_ui(self):
+        """Updates the UI elements based on the lock state."""
+        is_locked = self.is_config_locked.get()
+        lock_text = "Unlock Config 🔓" if is_locked else "Lock Config 🔒"
+        lock_tip = "Unlock the configuration" if is_locked else "Lock the configuration to prevent adding/removing valves"
+        
+        # Update the lock button in the footer
+        if hasattr(self, 'lock_btn_footer'):
+            self.lock_btn_footer.config(text=lock_text)
+            utils.tooltip(self.lock_btn_footer, lock_tip)
+
+        # Enable/disable relevant widgets
+        state = "disabled" if is_locked else "normal"
+        if hasattr(self, 'valve_entry'):
+            self.valve_entry.config(state=state)
+            self.add_valves_btn.config(state=state)
+            self.reset_valves_btn.config(state=state)
+            # Also disable remove buttons on individual valve cards
+            self.filter_valves() # Re-render to apply disabled state
 
     def _initialize_valve_data(self, valve_dict):
         """Sets default keys and the timer variable for a valve dictionary."""
@@ -142,7 +208,6 @@ class MainWindow:
 
                 try:
                     new_schedule = None
-                    # Try parsing cycle format first
                     if schedule_str.startswith("CYCLE"):
                         match = re.match(r"CYCLE:\s*ON\s*(\d+)\s*m,\s*OFF\s*(\d+)\s*m,\s*x(\d+|∞)\s*at\s*(\d{2}:\d{2})", schedule_str)
                         if match:
@@ -153,7 +218,7 @@ class MainWindow:
                                 "off_m": int(off_dur), "count": 0 if count_str == "∞" else int(count_str),
                                 "skip_rainy": skip_rainy
                             }
-                    else: # Try parsing fixed time format
+                    else: 
                         action, time_part = SchedulerWindow._parse_schedule_string(schedule_str)
                         if action and time_part:
                             new_schedule = {
@@ -174,22 +239,19 @@ class MainWindow:
         self._animate_status_dots()
 
     def _animate_status_dots(self):
-        # This check ensures the loop stops if the UI is destroyed
         if not hasattr(self, 'root') or not self.root.winfo_exists():
             return
 
         for i, valve_data in enumerate(self.valves):
-            # Check if the valve card and its label still exist
             if i < len(self.valve_status_labels) and self.valve_status_labels[i].winfo_exists():
                 label = self.valve_status_labels[i]
                 if valve_data.get("status"):
                     current_fg = str(label.cget("foreground"))
-                    pulse_color_1 = "#a3be8c" # Nord green
-                    pulse_color_2 = "#8fbcbb" # Nord teal
+                    pulse_color_1 = "#81C784" 
+                    pulse_color_2 = "#A5D6A7"
                     try:
                         label.config(foreground=pulse_color_2 if current_fg == pulse_color_1 else pulse_color_1)
                     except tk.TclError:
-                        # This can happen on theme change, just reset the color
                         label.config(foreground=pulse_color_1)
         self.root.after(750, self._animate_status_dots)
 
@@ -232,92 +294,99 @@ class MainWindow:
     def toggle_theme(self):
         self.theme = "dark" if self.theme == "light" else "light"
         self.settings.set("theme", self.theme)
-        # Re-initialize the entire UI to apply the theme
         self.apply_theme()
         self.setup_ui()
-        self.filter_valves() # This calls render_valves_grid
+        self.filter_valves() 
         self.update_aux_controls_ui()
         self.update_dashboard()
+        self.update_lock_status_ui()
 
     def apply_theme(self):
         self.style.theme_use("clam")
-        # Theme colors
-        dark_bg, dark_fg = "#2e3440", "#d8dee9"
-        dark_frame_bg, dark_border = "#3b4252", "#4c566a"
-        dark_accent, dark_accent_fg = "#88c0d0", "#2e3440"
-        dark_emergency, dark_emergency_fg = "#bf616a", "#eceff4"
-        dark_locked = "#434c5e"
-        light_bg, light_fg = "#f5f7fa", "#2d3748"
-        light_frame_bg, light_border = "#ffffff", "#e2e8f0"
-        light_accent, light_accent_fg = "#4299e1", "#ffffff"
-        light_emergency, light_emergency_fg = "#e53e3e", "#ffffff"
-        light_locked = "#edf2f7"
 
-        # Set colors based on current theme
+        slate_bg = "#263238"
+        slate_card_bg = "#37474F"
+        slate_text = "#CFD8DC"
+        slate_border = "#546E7A"
+        slate_accent_green = "#81C784"
+        slate_accent_fg = "#263238"
+        slate_error_red = "#E57373"
+
+        slate_light_bg = "#ECEFF1"
+        slate_light_card_bg = "#FFFFFF"
+        slate_light_text = "#263238"
+        slate_light_border = "#B0BEC5"
+        slate_light_accent_green = "#4CAF50"
+        slate_light_accent_fg = "#FFFFFF"
+        slate_light_error_red = "#D32F2F"
+
         if self.theme == "dark":
-            bg, fg, frame_bg, border = dark_bg, dark_fg, dark_frame_bg, dark_border
-            accent, accent_fg = dark_accent, dark_accent_fg
-            emergency, emergency_fg = dark_emergency, dark_emergency_fg
-            locked_bg = dark_locked
-            entry_bg, entry_fg, entry_insert = dark_frame_bg, dark_fg, dark_accent
-            tree_bg, tree_fg, tree_sel_bg = dark_frame_bg, dark_fg, "#5e81ac"
-            btn_bg, btn_fg, btn_active_bg = "#434c5e", "#eceff4", "#4c566a"
-        else: # light theme
-            bg, fg, frame_bg, border = light_bg, light_fg, light_frame_bg, light_border
-            accent, accent_fg = light_accent, light_accent_fg
-            emergency, emergency_fg = light_emergency, light_emergency_fg
-            locked_bg = light_locked
-            entry_bg, entry_fg, entry_insert = light_frame_bg, light_fg, light_accent
-            tree_bg, tree_fg, tree_sel_bg = light_frame_bg, light_fg, "#bee3f8"
-            btn_bg, btn_fg, btn_active_bg = "#e2e8f0", "#2d3748", "#cbd5e0"
+            bg, fg, frame_bg, border = slate_bg, slate_text, slate_card_bg, slate_border
+            accent, accent_fg = slate_accent_green, slate_accent_fg
+            emergency, emergency_fg = slate_error_red, slate_light_accent_fg
+            locked_bg = "#212b30"
+            entry_bg, entry_fg, entry_insert = "#455A64", fg, accent
+            tree_bg, tree_fg, tree_sel_bg = slate_card_bg, fg, "#546E7A"
+            btn_bg, btn_fg, btn_active_bg = slate_card_bg, fg, "#455A64"
+        else: 
+            bg, fg, frame_bg, border = slate_light_bg, slate_light_text, slate_light_card_bg, slate_light_border
+            accent, accent_fg = slate_light_accent_green, slate_light_accent_fg
+            emergency, emergency_fg = slate_light_error_red, slate_light_accent_fg
+            locked_bg = "#CFD8DC"
+            entry_bg, entry_fg, entry_insert = slate_light_card_bg, fg, accent
+            tree_bg, tree_fg, tree_sel_bg = slate_light_card_bg, fg, "#C8E6C9"
+            btn_bg, btn_fg, btn_active_bg = "#B0BEC5", fg, "#90A4AE"
 
-        # Apply styles
         self.style.configure(".", background=bg, foreground=fg, bordercolor=border, font=('Segoe UI', 10))
         self.style.configure("TFrame", background=bg)
         self.style.configure("TLabel", background=bg, foreground=fg)
-        self.style.configure("Header.TLabel", font=("Segoe UI Variable Display", 28, "bold"), background=bg, foreground=fg)
-        self.style.configure("Subheader.TLabel", font=("Segoe UI Variable Text", 14), background=bg, foreground=fg)
-        self.style.configure("TButton", background=btn_bg, foreground=btn_fg, borderwidth=1, relief="raised", font=('Segoe UI', 10), padding=(8, 5))
-        self.style.map("TButton", background=[('active', btn_active_bg), ('pressed', accent)])
-        self.style.configure("Accent.TButton", background=accent, foreground=accent_fg, font=('Segoe UI', 10, 'bold'))
-        self.style.map("Accent.TButton", background=[('active', btn_active_bg)])
-        self.style.configure("Emergency.TButton", background=emergency, foreground=emergency_fg, font=('Segoe UI', 10, 'bold'))
-        self.style.map("Emergency.TButton", background=[('active', '#d08770' if self.theme == 'dark' else '#f56565')])
+        self.style.configure("Header.TLabel", font=("Segoe UI Semibold", 26), background=bg, foreground=fg)
+        self.style.configure("Subheader.TLabel", font=("Segoe UI", 13), background=bg, foreground=fg)
+        
+        self.style.configure("TButton", background=btn_bg, foreground=btn_fg, borderwidth=1, relief="solid", font=('Segoe UI', 10, 'bold'), padding=(10, 6))
+        self.style.map("TButton", bordercolor=[('active', accent)], background=[('active', btn_active_bg)])
+        
+        self.style.configure("Accent.TButton", background=accent, foreground=accent_fg, borderwidth=1, bordercolor=accent)
+        self.style.map("Accent.TButton", background=[('active', accent)])
+        
+        self.style.configure("Emergency.TButton", background=emergency, foreground=emergency_fg, borderwidth=1, bordercolor=emergency)
+        self.style.map("Emergency.TButton", background=[('active', emergency)])
+
         self.style.configure("Card.TFrame", background=frame_bg, borderwidth=1, relief="solid", bordercolor=border)
-        self.style.configure("Card.TFrame.Label", background=frame_bg, foreground=fg, font=('Segoe UI', 11, 'bold'))
-        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg, insertcolor=entry_insert, bordercolor=border, lightcolor=border, darkcolor=border)
-        self.style.configure("TScrollbar", troughcolor=bg, background=btn_bg, arrowcolor=fg)
-        self.style.configure("TRadiobutton", background=frame_bg, foreground=fg)
-        self.style.map("TRadiobutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', bg)])
+        self.style.configure("Card.TFrame.Label", background=frame_bg, foreground=fg, font=('Segoe UI Semibold', 11))
+        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg, insertcolor=entry_insert, borderwidth=1, relief="solid", bordercolor=border)
+        self.style.map("TEntry", bordercolor=[('focus', accent)])
+        
+        self.style.configure("TScrollbar", troughcolor=bg, background=frame_bg, arrowcolor=fg, borderwidth=0, relief="flat")
+        self.style.configure("TRadiobutton", background=frame_bg, foreground=fg, font=('Segoe UI', 10))
+        self.style.map("TRadiobutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', frame_bg)])
         self.style.configure("TCheckbutton", background=frame_bg, foreground=fg)
-        self.style.map("TCheckbutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', bg)])
-        self.style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg, font=('Segoe UI', 10), rowheight=28)
-        self.style.map("Treeview", background=[('selected', tree_sel_bg)], foreground=[('selected', fg)])
-        self.style.configure("Treeview.Heading", background=btn_bg, foreground=btn_fg, relief="raised", font=('Segoe UI', 10, 'bold'))
-        self.style.map("Treeview.Heading", relief=[('active', 'groove'), ('pressed', 'sunken')])
-        self.style.configure("TCombobox", fieldbackground=entry_bg, background=btn_bg, foreground=entry_fg, arrowcolor=fg, insertcolor=entry_insert, lightcolor=border, darkcolor=border, bordercolor=border)
+        self.style.map("TCheckbutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', frame_bg)])
+        
+        self.style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg, font=('Segoe UI', 10), rowheight=28, borderwidth=0)
+        self.style.map("Treeview", background=[('selected', tree_sel_bg)], foreground=[('selected', accent_fg if self.theme == 'dark' else fg)])
+        self.style.configure("Treeview.Heading", background=bg, foreground=fg, relief="flat", font=('Segoe UI', 10, 'bold'), padding=5)
+
+        self.style.configure("TCombobox", fieldbackground=entry_bg, background=btn_bg, foreground=entry_fg, arrowcolor=fg, insertcolor=entry_insert, bordercolor=border)
         self.style.map('TCombobox', selectbackground=[('readonly', tree_sel_bg)], selectforeground=[('readonly', fg)])
+        
         self.style.configure("Valve.Card.TFrame", background=frame_bg, borderwidth=1, relief="solid")
-        self.style.map("Valve.Card.TFrame", bordercolor=[('!focus', border), ('focus', accent)])
-        self.style.configure("Locked.Valve.Card.TFrame", background=locked_bg, bordercolor=dark_emergency if self.theme == 'dark' else light_emergency)
+        self.style.map("Valve.Card.TFrame", bordercolor=[('!focus', accent), ('active', accent)])
+        self.style.configure("Locked.Valve.Card.TFrame", background=locked_bg, bordercolor=emergency)
 
         if hasattr(self, 'root'):
             self.root.configure(bg=bg)
 
     def setup_ui(self):
-        """Sets up the main UI using a PanedWindow for a robust, user-resizable layout."""
-        # Clear existing widgets before rebuilding
         for widget in self.root.winfo_children():
             widget.destroy()
         self.root.configure(bg=self.style.lookup(".", "background"))
 
         self.setup_menu()
 
-        # --- Top Section (Header, Dashboard, Controls) ---
         top_frame = ttk.Frame(self.root, style="TFrame", padding=(30, 15, 30, 10))
         top_frame.pack(fill=tk.X, side=tk.TOP)
 
-        # Header
         header = ttk.Frame(top_frame, style="TFrame")
         header.pack(fill=tk.X, pady=(5, 2))
         ttk.Label(header, text="👨‍🌾", font=("Segoe UI Emoji", 36), style="TLabel").pack(side=tk.LEFT, padx=(0, 15), pady=10)
@@ -326,7 +395,6 @@ class MainWindow:
         ttk.Label(title_frame, text=constants.APP_NAME, style="Header.TLabel").pack(anchor="w")
         ttk.Label(title_frame, text="Automate and Monitor Your Irrigation System", style="Subheader.TLabel").pack(anchor="w")
 
-        # Dashboard
         dash = ttk.Frame(top_frame, style="TFrame")
         dash.pack(fill=tk.X, pady=(15, 10))
         dash_font = ('Segoe UI Semibold', 11)
@@ -342,7 +410,6 @@ class MainWindow:
         ttk.Label(dash_right_frame, textvariable=self.live_weather_var, font=dash_font).pack(anchor='e')
         ttk.Label(dash_right_frame, textvariable=self.system_time_var, font=dash_font).pack(anchor='e')
 
-        # Controls & Search
         top_controls_card = ttk.Labelframe(top_frame, text="System Controls & Search", style="Card.TFrame", padding=(15, 10))
         top_controls_card.pack(pady=10, fill=tk.X)
         add_search_frame = ttk.Frame(top_controls_card)
@@ -352,9 +419,9 @@ class MainWindow:
         ttk.Label(add_frame, text=f"Valves to add (1-{constants.MAX_VALVES}):").pack(side=tk.LEFT, pady=(0, 3))
         self.valve_entry = ttk.Entry(add_frame, textvariable=self.valve_count_var, width=5, style="TEntry", font=('Segoe UI', 10))
         self.valve_entry.pack(side=tk.LEFT, padx=7)
-        add_btn = ttk.Button(add_frame, text="Add", command=self.add_valves, style="Accent.TButton")
-        add_btn.pack(side=tk.LEFT)
-        utils.tooltip(add_btn, "Add new valves (Ctrl+N)")
+        self.add_valves_btn = ttk.Button(add_frame, text="Add", command=self.add_valves, style="Accent.TButton")
+        self.add_valves_btn.pack(side=tk.LEFT)
+        utils.tooltip(self.add_valves_btn, "Add new valves (Ctrl+N)")
         search_frame = ttk.Frame(add_search_frame)
         search_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(search_frame, text="🔍 Search:", font=("Segoe UI Emoji", 12)).pack(side=tk.LEFT)
@@ -364,22 +431,22 @@ class MainWindow:
         self.search_entry.bind("<KeyRelease>", lambda _: self.filter_valves())
         btn_group_frame = ttk.Frame(top_controls_card)
         btn_group_frame.pack(pady=(8, 8), padx=8, fill=tk.X, expand=True)
-        main_actions = [
-            ("Scheduler 📅", self.open_scheduler_window, "Ctrl+Alt+S"),
-            ("Reset All ♻️", self.reset_valves, "Ctrl+R"),
-            ("🚨 Turn All Systems OFF", self.turn_all_systems_off, "Immediately turns OFF all valves and aux controls.")
-        ]
-        for txt, cmd, tip in main_actions:
-            style = "Emergency.TButton" if "OFF" in txt else "TButton"
-            b = ttk.Button(btn_group_frame, text=txt, command=cmd, style=style)
-            b.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
-            utils.tooltip(b, tip)
+        
+        self.scheduler_btn = ttk.Button(btn_group_frame, text="Scheduler 📅", command=self.open_scheduler_window, style="TButton")
+        self.scheduler_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        utils.tooltip(self.scheduler_btn, "Ctrl+Alt+S")
 
-        # --- Main Paned Window Layout ---
+        self.reset_valves_btn = ttk.Button(btn_group_frame, text="Reset All ♻️", command=self.reset_valves, style="TButton")
+        self.reset_valves_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        utils.tooltip(self.reset_valves_btn, "Ctrl+R")
+        
+        self.emergency_off_btn = ttk.Button(btn_group_frame, text="🚨 Turn All Systems OFF", command=self.turn_all_systems_off, style="Emergency.TButton")
+        self.emergency_off_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        utils.tooltip(self.emergency_off_btn, "Immediately turns OFF all valves and aux controls.")
+
         self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL, style="TPanedwindow")
         self.main_pane.pack(fill=tk.BOTH, expand=True, padx=30, pady=(0, 10))
 
-        # Left Pane: Valve Cards
         valves_lf = ttk.Labelframe(self.main_pane, text="Configured Irrigation Valves", style="Card.TFrame", padding=10)
         self.main_pane.add(valves_lf, weight=1)
         valves_lf.rowconfigure(0, weight=1)
@@ -398,14 +465,12 @@ class MainWindow:
         self.valve_canvas.bind_all("<Button-5>", lambda e: self.valve_canvas.yview_scroll(1, "units"))
         self.valve_status_labels = []
 
-        # Right Pane: Aux Controls & Sensors
         right_column_frame = ttk.Frame(self.main_pane, style="TFrame")
         self.main_pane.add(right_column_frame, weight=0)
         right_column_frame.pack_propagate(False)
         right_column_frame.rowconfigure(0, weight=1)
         right_column_frame.columnconfigure(0, weight=1)
         right_column_frame.columnconfigure(1, weight=1)
-        # Aux Controls
         aux_lf = ttk.Labelframe(right_column_frame, text="Auxiliary Controls", style="Card.TFrame", padding=10)
         aux_lf.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         self.aux_buttons_ui_elements = []
@@ -415,7 +480,6 @@ class MainWindow:
             btn.bind("<Button-3>", lambda e, idx=i: self.rename_aux_control(idx))
             utils.tooltip(btn, f"Controls {aux_data['name']}. Right-click to rename. Schedule via Master Scheduler.")
             self.aux_buttons_ui_elements.append(btn)
-        # Sensor Data
         sensor_lf = ttk.Labelframe(right_column_frame, text="🌿 Live Sensor Data", style="Card.TFrame", padding=10)
         sensor_lf.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         sensor_lf.columnconfigure(1, weight=1)
@@ -430,20 +494,22 @@ class MainWindow:
         if not self.hardware.is_pi:
             ttk.Label(sensor_lf, text="(Simulation Mode)", font=('Segoe UI', 8, 'italic')).grid(row=len(sensor_labels), column=0, columnspan=2, pady=10)
 
-        # --- Footer ---
         self.footer = ttk.Frame(self.root, style="TFrame", padding=(30, 5))
         self.footer.pack(fill=tk.X, side=tk.BOTTOM, pady=(5, 10))
         self.footer.columnconfigure(0, weight=1)
         self.footer_label = ttk.Label(self.footer, text="System Ready.", anchor="w", font=('Segoe UI', 10))
         self.footer_label.pack(side=tk.LEFT)
-        theme_btn_footer = ttk.Button(self.footer, text="🌗 Theme", command=self.toggle_theme, style="TButton", compound=tk.LEFT)
+        
+        self.lock_btn_footer = ttk.Button(self.footer, text="Lock Config 🔒", command=self.toggle_configuration_lock, style="TButton")
+        self.lock_btn_footer.pack(side=tk.RIGHT, padx=5)
+        
+        theme_btn_footer = ttk.Button(self.footer, text="🌗 Theme", command=self.toggle_theme, style="TButton")
         theme_btn_footer.pack(side=tk.RIGHT, padx=5)
         utils.tooltip(theme_btn_footer, "Toggle Dark/Light Theme (Ctrl+T)")
 
         self.root.after(100, self._set_initial_sash)
 
     def _set_initial_sash(self):
-        """Sets the initial 70/30 sash position for the main pane."""
         try:
             initial_pos = int(self.main_pane.winfo_width() * 0.7)
             self.main_pane.sashpos(0, initial_pos)
@@ -454,7 +520,6 @@ class MainWindow:
     def setup_menu(self):
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
-        # File Menu
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Import Config", command=self.import_config, accelerator="Ctrl+I")
@@ -462,7 +527,6 @@ class MainWindow:
         file_menu.add_command(label="Save Log", command=self.save_log_manually, accelerator="Ctrl+Shift+S")
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.on_close)
-        # System Menu
         system_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="System", menu=system_menu)
         system_menu.add_command(label="Automation Rules", command=self.open_automation_window)
@@ -471,19 +535,15 @@ class MainWindow:
         system_menu.add_command(label="System Logs", command=self.open_log_window)
         system_menu.add_separator()
         system_menu.add_command(label="Undo Remove", command=self.undo_remove, accelerator="Ctrl+Z")
-        # Location Menu
         location_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Location", menu=location_menu)
         location_menu.add_command(label="Set Location...", command=self.set_location)
-        # Help Menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Sensor Connection Guide", command=self.show_sensor_connection_info)
         help_menu.add_command(label="About", command=self.show_about)
 
     def update_sensor_readings(self):
-        """Fetches and updates sensor readings from the hardware manager."""
-        # DHT22
         temp_c, humidity = self.hardware.read_dht22()
         if isinstance(temp_c, (float, int)):
             self.sensor_temp_c.set(f"{temp_c:.1f}°C")
@@ -491,7 +551,6 @@ class MainWindow:
         else:
             self.sensor_temp_c.set(str(temp_c))
             self.sensor_humidity.set(str(humidity))
-        # DHT11
         temp_c_dht11, humidity_dht11 = self.hardware.read_dht11()
         if isinstance(temp_c_dht11, (float, int)):
             self.sensor_temp_c_dht11.set(f"{temp_c_dht11:.1f}°C")
@@ -499,7 +558,6 @@ class MainWindow:
         else:
             self.sensor_temp_c_dht11.set(str(temp_c_dht11))
             self.sensor_humidity_dht11.set(str(humidity_dht11))
-        # Moisture
         moisture_status = self.hardware.read_moisture()
         if moisture_status == "Wet": self.sensor_moisture.set(f"💧 Wet")
         elif moisture_status == "Dry": self.sensor_moisture.set(f"🔥 Dry")
@@ -509,7 +567,6 @@ class MainWindow:
             self.root.after(5000, self.update_sensor_readings)
 
     def show_sensor_connection_info(self):
-        """Displays a messagebox with sensor connection details."""
         win = tk.Toplevel(self.root)
         win.title("Sensor Connection and Integration Guide")
         win.geometry("700x550")
@@ -524,7 +581,6 @@ class MainWindow:
                                bg=bg, fg=fg, bd=0, highlightthickness=0, padx=15, pady=15)
         text_widget.pack(expand=True, fill="both")
 
-        # Define tags for styling
         text_widget.tag_configure("h1", font=("Segoe UI", 14, "bold"), spacing3=10)
         text_widget.tag_configure("h2", font=("Segoe UI", 11, "bold"), spacing1=15, spacing3=5)
         text_widget.tag_configure("code", font=("Consolas", 9), background=self.style.lookup("TEntry", "fieldbackground"))
@@ -532,7 +588,6 @@ class MainWindow:
         text_widget.tag_configure("lib", font=("Consolas", 9, "italic"))
         text_widget.tag_configure("sep", overstrike=True)
 
-        # Insert content
         text_widget.insert("end", "Farm Sensor Integration Guide\n", "h1")
         text_widget.insert("end", "This guide provides connection details for common sensors on a Raspberry Pi (BCM Pinout).\n\n")
         text_widget.insert("end", "--------------------------------------------------------------------------------------------------\n", "sep")
@@ -585,7 +640,6 @@ class MainWindow:
         self.valve_canvas.configure(scrollregion=self.valve_canvas.bbox("all"))
 
     def render_valves_grid(self):
-        """Renders the valve cards in a responsive grid."""
         self.valve_status_labels.clear()
         for widget in self.valve_card_frame.winfo_children():
             widget.destroy()
@@ -615,7 +669,7 @@ class MainWindow:
                 is_on = valve_data.get("status")
                 icon = valve_data.get("icon", "💧")
                 status_txt = "🟢" if is_on else ("🔴" if valve_data.get("locked") and is_on else "⚪")
-                status_color = "#a3be8c" if is_on else ("#bf616a" if valve_data.get("locked") else self.style.lookup("TLabel", "foreground"))
+                status_color = "#81C784" if is_on else ("#E57373" if valve_data.get("locked") else self.style.lookup("TLabel", "foreground"))
 
                 header_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
                 header_frame.pack(fill=tk.X, pady=(0, 8))
@@ -638,19 +692,27 @@ class MainWindow:
                 utils.tooltip(sl, "Open Master Scheduler to view/edit schedules")
                 note = valve_data.get('note', '')
                 if note:
-                    nl = ttk.Label(info_frame, text=f"📝 {note[:25]}{'...' if len(note)>25 else ''}", font=('Segoe UI', 9, "italic"), foreground="#b48ead" if self.theme == "dark" else "#718096", anchor="w")
+                    nl = ttk.Label(info_frame, text=f"📝 {note[:25]}{'...' if len(note)>25 else ''}", font=('Segoe UI', 9, "italic"), foreground="#B0BEC5" if self.theme == "dark" else "#78909C", anchor="w")
                     nl.pack(anchor="w", fill=tk.X)
                     utils.tooltip(nl, f"Note: {note}")
 
                 btns_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
                 btns_frame.pack(fill=tk.X, pady=(5, 0))
-                btns = [("✏️", lambda i=orig_idx: self.rename_valve(i), "Rename"), ("🗑️", lambda i=orig_idx: self.remove_valve(i), "Remove"),
-                        ("🔒" if not valve_data.get("locked") else "🔓", lambda i=orig_idx: self.toggle_lock(i), "Lock/Unlock"),
-                        ("📝", lambda i=orig_idx: self.edit_note(i), "Note"), ("📋", lambda i=orig_idx: self.copy_valve(i), "Copy Cfg"),
-                        ("📈", lambda i=orig_idx: self.show_valve_history(i), "History"), ("⚙️", lambda i=orig_idx: self.open_valve_settings_window(i), "Settings"),
-                        ("📊", lambda i=orig_idx: self.show_valve_stats(i), "Stats")]
-                for txt, cmd, tip in btns:
-                    b = ttk.Button(btns_frame, text=txt, command=cmd, width=4, style="TButton")
+                
+                remove_btn_state = "disabled" if self.is_config_locked.get() else "normal"
+
+                action_buttons = [
+                    ("✏️", lambda i=orig_idx: self.rename_valve(i), "Rename", "normal"), 
+                    ("🗑️", lambda i=orig_idx: self.remove_valve(i), "Remove", remove_btn_state),
+                    ("🔒" if not valve_data.get("locked") else "🔓", lambda i=orig_idx: self.toggle_lock(i), "Lock/Unlock", "normal"),
+                    ("📝", lambda i=orig_idx: self.edit_note(i), "Note", "normal"), 
+                    ("📋", lambda i=orig_idx: self.copy_valve(i), "Copy Cfg", "normal"),
+                    ("📈", lambda i=orig_idx: self.show_valve_history(i), "History", "normal"), 
+                    ("⚙️", lambda i=orig_idx: self.open_valve_settings_window(i), "Settings", "normal"),
+                    ("📊", lambda i=orig_idx: self.show_valve_stats(i), "Stats", "normal")
+                ]
+                for txt, cmd, tip, state in action_buttons:
+                    b = ttk.Button(btns_frame, text=txt, command=cmd, width=4, style="TButton", state=state)
                     b.pack(side=tk.LEFT, padx=2, pady=2, fill=tk.X, expand=True)
                     utils.tooltip(b, tip)
 
@@ -685,6 +747,9 @@ class MainWindow:
 
 
     def add_valves(self):
+        if self.is_config_locked.get():
+            self.notify("Configuration is locked. Cannot add valves.", 4000)
+            return
         try:
             count = int(self.valve_count_var.get())
             if not (1 <= count <= constants.MAX_VALVES):
@@ -728,6 +793,9 @@ class MainWindow:
         self.update_dashboard()
 
     def reset_valves(self):
+        if self.is_config_locked.get():
+            self.notify("Configuration is locked. Cannot reset valves.", 4000)
+            return
         if not self.valves or not messagebox.askyesno("Reset All", "Remove ALL valves & schedules?", icon='warning'):
             return
         self.clear_all_pending_schedules()
@@ -756,6 +824,9 @@ class MainWindow:
             self.notify(f"Export failed: {e}")
 
     def import_config(self):
+        if self.is_config_locked.get():
+            self.notify("Configuration is locked. Cannot import.", 4000)
+            return
         if (self.valves or self.aux_controls) and not messagebox.askyesno("Import Config", "Overwrite current config?", icon='warning'):
             return
         fp = filedialog.askopenfilename(filetypes=[("JSON", "*.json")], title="Import Config")
@@ -835,7 +906,6 @@ class MainWindow:
             elif now.hour == h and now.minute == m:
                 if not current_item_obj.get("locked"):
                     if is_cycle:
-                        # Basic cycle logic here, more complex state needed for full implementation
                         self.log(f"Cycle for '{current_item_obj['name']}' started.")
                         item_idx = self.valves.index(current_item_obj) if "flow_rate_lpm" in current_item_obj else self.aux_controls.index(current_item_obj)
                         self.toggle_item(item_idx, "valve" if "flow_rate_lpm" in current_item_obj else "aux", is_on=True)
@@ -846,8 +916,7 @@ class MainWindow:
 
                 self.log(f"Fixed time event for '{current_item_obj['name']}' fired. Removing schedule.")
                 self.clear_schedule_by_id(job_id, reason="executed")
-                return # Stop rescheduling this job
-            # Reschedule the check
+                return 
             self.scheduled_jobs[job_id] = self.root.after(constants.SCHEDULER_CHECK_INTERVAL_S * 1000, runner)
         self.scheduled_jobs[job_id] = self.root.after(1000, runner)
         self.log(f"Schedule armed for '{item_obj['name']}': {self.format_schedule_for_display(schedule_obj)}")
@@ -882,7 +951,6 @@ class MainWindow:
         self.log(f"Re-activated {count} schedule(s).")
 
     def set_schedule_for_item(self, item_type, item_idx, schedule_id, details):
-        """Adds or updates a schedule for an item."""
         target_list = self.valves if item_type == "valve" else self.aux_controls
         item_obj = target_list[item_idx]
 
@@ -903,10 +971,10 @@ class MainWindow:
             else: return False
         except (ValueError, TypeError): return False
 
-        if schedule_id: # Update existing
+        if schedule_id: 
             for i, sched in enumerate(item_obj["schedules"]):
                 if sched['id'] == schedule_id: new_schedule['id'] = schedule_id; item_obj["schedules"][i] = new_schedule; break
-        else: # Add new
+        else: 
             new_schedule['id'] = f"sched_{int(time.time() * 1000)}_{random.randint(100, 999)}"
             item_obj.setdefault("schedules", []).append(new_schedule)
 
@@ -949,7 +1017,6 @@ class MainWindow:
         self.toggle_item(idx, "aux")
 
     def toggle_item(self, idx, item_type, is_on=None, duration_min=None):
-        """Generic toggle function for valves or aux controls."""
         item_list = self.valves if item_type == "valve" else self.aux_controls
         item = item_list[idx]
 
@@ -1003,7 +1070,6 @@ class MainWindow:
         self.log("Application closing. Saving state.")
         self.save_state()
         self.hardware.cleanup()
-        # Cancel all pending .after jobs to prevent errors on close
         for job_id in self.root.tk.call('after', 'info'):
             self.root.after_cancel(job_id)
         self.root.destroy()
@@ -1026,6 +1092,9 @@ class MainWindow:
         self.notify(f"Valve '{valve['name']}' {status}.")
 
     def remove_valve(self, idx):
+        if self.is_config_locked.get():
+            self.notify("Configuration is locked. Cannot remove valves.", 4000)
+            return
         valve = self.valves[idx]
         if not messagebox.askyesno("Remove", f"Remove '{valve['name']}' & all its schedules?", icon='warning'): return
         self.clear_all_schedules_for_item("valve", idx)
@@ -1039,6 +1108,9 @@ class MainWindow:
         self.update_dashboard()
 
     def undo_remove(self):
+        if self.is_config_locked.get():
+            self.notify("Configuration is locked. Cannot undo.", 4000)
+            return
         if not self.undo_stack: self.notify("Nothing to undo."); return
         if len(self.valves) >= constants.MAX_VALVES: self.notify(f"Max valves reached. Cannot restore."); return
         valve_to_restore = self.undo_stack.pop()
@@ -1047,10 +1119,13 @@ class MainWindow:
             available_pins = [p for p in constants.GPIO_PINS if p not in current_pins]
             if not available_pins:
                 self.notify(f"Cannot restore '{valve_to_restore['name']}': Pin taken and no free pins.", duration=4000)
-                self.undo_stack.append(valve_to_restore) # Put it back
+                self.undo_stack.append(valve_to_restore) 
                 return
             valve_to_restore['pin'] = available_pins[0]
+        
         self.valves.append(valve_to_restore)
+        self._initialize_valve_data(valve_to_restore)
+        
         self._activate_all_schedules()
         self.save_state()
         self.filter_valves()
@@ -1146,7 +1221,7 @@ class MainWindow:
     def check_automation_rules(self):
         now = time.time()
         for i, rule in enumerate(self.automation_rules):
-            if rule.get("last_triggered") and (now - rule["last_triggered"] < 300): continue # 5 min cooldown
+            if rule.get("last_triggered") and (now - rule["last_triggered"] < 300): continue 
             current_value, triggered = None, False
             if rule['sensor'] == 'Soil Moisture': current_value = self.sensor_moisture.get().split(' ')[-1]
             elif rule['sensor'] == 'Temp (DHT22)': 
@@ -1197,7 +1272,7 @@ class MainWindow:
         if hasattr(self, 'root') and self.root.winfo_exists(): self.root.after(1000, self.update_system_clock)
 
     def update_location_data(self):
-        if self.api_key == "d7b8a4a58f2d8f3f8b9e8a7b9c8d7e6f": # Default key
+        if self.api_key == "d7b8a4a58f2d8f3f8b9e8a7b9c8d7e6f": 
             self.live_weather_var.set("Weather: API Key Needed")
             if hasattr(self, 'root') and self.root.winfo_exists(): self.root.after(600000, self.update_location_data)
             return
@@ -1212,7 +1287,6 @@ class MainWindow:
             self.live_weather_var.set(f"Weather: {weather_icon} {weather_desc}, {temp:.1f}°C")
             self.location_var.set(f"Location: {data['name']}, {data['sys']['country']}")
 
-            # Update sunrise/sunset times
             local_sunrise = datetime.datetime.fromtimestamp(data['sys']['sunrise'] + data.get('timezone', 0), tz=datetime.timezone.utc)
             local_sunset = datetime.datetime.fromtimestamp(data['sys']['sunset'] + data.get('timezone', 0), tz=datetime.timezone.utc)
             self.settings.set("virtual_sunrise_time", local_sunrise.strftime('%H:%M'))
@@ -1220,7 +1294,7 @@ class MainWindow:
             self.log(f"Live data updated for {self.location}.")
         except requests.exceptions.RequestException: self.live_weather_var.set("Weather: Network Error")
         except (KeyError, IndexError): self.live_weather_var.set("Weather: Invalid Location")
-        if hasattr(self, 'root') and self.root.winfo_exists(): self.root.after(600000, self.update_location_data) # Update every 10 mins
+        if hasattr(self, 'root') and self.root.winfo_exists(): self.root.after(600000, self.update_location_data)
 
     def show_about(self):
         messagebox.showinfo(f"About {constants.APP_NAME}", f"{constants.APP_NAME} - v{constants.APP_VERSION}\n\nAdvanced Irrigation & Auxiliary Control.\n\nBuilt with Python & Tkinter.\n© 2024-2025 SmartFarm Solutions Inc.", parent=self.root)
@@ -1237,7 +1311,6 @@ class MainWindow:
         return None
 
     def format_schedule_for_display(self, schedule_obj):
-        """Creates a human-readable string from a schedule dictionary."""
         s_type = schedule_obj.get('type', 'Fixed Time')
         if s_type == 'Cycle':
             count = schedule_obj.get('count', '∞') or '∞'

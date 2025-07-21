@@ -25,6 +25,9 @@ class PersistentSettings:
             "virtual_sunrise_time": "06:00",
             "virtual_sunset_time": "18:30",
             "enable_rain_skip": True,
+            "config_locked": False,
+            "admin_user": None,
+            "admin_pass_hash": None,
         }
 
     def load(self):
@@ -53,7 +56,6 @@ class PersistentSettings:
             print(f"Settings file {self.filename} does not exist. Using default settings.")
             self.data = default_settings
 
-        # Ensure all default keys exist in the loaded data
         for key, value in default_settings.items():
             self.data.setdefault(key, value)
 
