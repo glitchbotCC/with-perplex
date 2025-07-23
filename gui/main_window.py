@@ -17,6 +17,7 @@ import hashlib
 from .. import constants, utils
 from ..settings_manager import PersistentSettings
 from ..hardware_manager import HardwareManager
+from .mqtt_manager import MqttManager
 
 # GUI window imports
 from .settings_windows import AppSettingsWindow, ValveSettingsWindow
@@ -86,6 +87,7 @@ class MainWindow:
         self.location_var = tk.StringVar(value=f"Location: {self.location}")
         self.system_time_var = tk.StringVar(value="Time: --:--:--")
         self.live_weather_var = tk.StringVar(value="Weather: Fetching...")
+        self.mqtt_status_var = tk.StringVar(value="MQTT: Initializing...")
         self.sensor_temp_c = tk.StringVar(value="N/A")
         self.sensor_humidity = tk.StringVar(value="N/A")
         self.sensor_temp_c_dht11 = tk.StringVar(value="N/A")
@@ -103,6 +105,8 @@ class MainWindow:
         self.root.geometry("1350x850")
         self.root.minsize(1100, 700)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+       
+        self.mqtt_manager = MqttManager(self)
 
         self._activate_all_schedules()
         self.filter_valves()
@@ -115,10 +119,158 @@ class MainWindow:
         self.check_automation_rules()
         self.log("Application initialized successfully.")
         self.update_lock_status_ui()
+    
+    def set_mqtt_status(self, status, color):
+       """Updates the MQTT status label's text and color safely on the main thread."""
+       if hasattr(self, 'mqtt_status_var') and hasattr(self, 'mqtt_status_label'):
+        self.mqtt_status_var.set(f"MQTT: {status}")
+
+        dark_colors = {"green": "#81C784", "red": "#E57373", "orange": "#FFB74D", "grey": "#90A4AE"}
+        light_colors = {"green": "#4CAF50", "red": "#D32F2F", "orange": "#FFA726", "grey": "#546E7A"}
+
+        theme_colors = dark_colors if self.theme == "dark" else light_colors
+
+        self.mqtt_status_label.config(foreground=theme_colors.get(color, self.style.lookup("TLabel", "foreground")))
 
     def _hash_password(self, password):
         """Hashes a password using SHA-256."""
         return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    
+    def _process_mqtt_command(self, command, data):
+        """Processes a command received from the MqttManager."""
+        if command == "toggle_valve":
+            if "index" in data and 0 <= data["index"] < len(self.valves):
+                self.toggle_valve(data["index"])
+        
+        elif command == "toggle_aux":
+            if "index" in data and 0 <= data["index"] < len(self.aux_controls):
+                self.toggle_aux_control(data["index"])
+
+        elif command == "add_valves":
+            if not self.is_config_locked.get():
+                count = data.get("count", 1)
+                self.valve_count_var.set(str(count))
+                self.add_valves()
+            else:
+                self.log("MQTT command 'add_valves' blocked: Configuration is locked.")
+
+        elif command == "remove_valve":
+            if not self.is_config_locked.get() and "index" in data:
+                self.clear_all_schedules_for_item("valve", data["index"])
+                valve = self.valves[data["index"]]
+                self.hardware.set_pin_state(valve['pin'], False)
+                rem_copy = self.valves.pop(data["index"])
+                self.undo_stack.append(rem_copy.copy())
+                self.log(f"Valve '{rem_copy['name']}' removed via web UI.")
+                self.save_state()
+                self.filter_valves()
+                self.update_dashboard()
+        
+        elif command == "rename_item":
+            if not self.is_config_locked.get() and "type" in data and "index" in data and "newName" in data:
+                item_list = self.valves if data['type'] == 'valve' else self.aux_controls
+                item = item_list[data['index']]
+                item['name'] = data['newName']
+                self.save_state()
+                if data['type'] == 'valve': self.filter_valves()
+                else: self.update_aux_controls_ui()
+
+        elif command == "edit_note":
+             if "index" in data and "newNote" in data:
+                self.valves[data['index']]['note'] = data['newNote']
+                self.save_state()
+                self.filter_valves()
+        
+        elif command == "toggle_valve_lock":
+            if "index" in data:
+                self.toggle_lock(data['index'])
+
+        elif command == "emergency_stop":
+            self.turn_all_systems_off(from_web=True)
+            
+        elif command == "toggle_lock":
+            if self.is_config_locked.get(): # Trying to unlock
+                password = data.get("password")
+                if password and self._hash_password(password) == self.admin_pass_hash:
+                    self.is_config_locked.set(False)
+                    self.settings.set("config_locked", False)
+                    self.log("Configuration Unlocked via web UI.")
+                else:
+                    self.log("Failed web UI unlock attempt.")
+            else: # Trying to lock
+                if data.get("is_setting_credentials"):
+                    self.admin_user = data["username"]
+                    self.admin_pass_hash = self._hash_password(data["password"])
+                    self.settings.set("admin_user", self.admin_user)
+                    self.settings.set("admin_pass_hash", self.admin_pass_hash)
+                    self.log("Admin credentials set via web UI.")
+                
+                self.is_config_locked.set(True)
+                self.settings.set("config_locked", True)
+                self.log("Configuration Locked via web UI.")
+            self.update_lock_status_ui()
+
+    def _get_current_state_as_dict(self):
+        """Aggregates the entire application state into a single dictionary for publishing."""
+        valves_copy = [v.copy() for v in self.valves]
+        for v in valves_copy:
+            v.pop("timer_var", None)
+
+        sensors_data = {
+            'Temp (DHT22)': self.sensor_temp_c.get(),
+            'Humidity (DHT22)': self.sensor_humidity.get(),
+            'Temp (DHT11)': self.sensor_temp_c_dht11.get(),
+            'Humidity (DHT11)': self.sensor_humidity_dht11.get(),
+            'Soil Moisture': self.sensor_moisture.get()
+        }
+
+        settings_data = {
+            'location': self.location,
+            'virtual_sunrise_time': self.settings.get("virtual_sunrise_time"),
+            'virtual_sunset_time': self.settings.get("virtual_sunset_time"),
+            'enable_rain_skip': self.settings.get("enable_rain_skip"),
+            'config_locked': self.is_config_locked.get(),
+            'admin_user': self.admin_user,
+        }
+
+        return {
+            "valves": valves_copy,
+            "aux_controls": self.aux_controls,
+            "automation_rules": self.automation_rules,
+            "schedule_history": self.schedule_history,
+            "logs": self.logs[-100:],
+            "settings": settings_data,
+            "sensors": sensors_data,
+            "live_weather": self.live_weather_var.get(),
+            "system_time": self.system_time_var.get(),
+            "theme": self.theme
+        }
+
+    def _hash_password(self, password):
+        return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+    def save_state(self):
+        """Saves the current application state and tells the MQTT manager to publish it."""
+        valves_to_save = [v.copy() for v in self.valves]
+        for v in valves_to_save:
+            v.pop("timer_var", None)
+            
+        self.settings.set("valves", valves_to_save)
+        self.settings.set("aux_controls", self.aux_controls)
+        self.settings.set("automation_rules", self.automation_rules)
+        self.settings.set("schedule_history", self.schedule_history)
+        self.settings.set("logs", self.logs)
+        
+        if self.mqtt_manager:
+            self.mqtt_manager.publish_state()
+
+    def on_close(self):
+        self.log("Application closing.")
+        self.hardware.cleanup()
+        if self.mqtt_manager:
+            self.mqtt_manager.disconnect()
+        self.root.destroy()
+
 
     def toggle_configuration_lock(self):
         """Handles the logic for locking or unlocking the configuration."""
@@ -406,6 +558,9 @@ class MainWindow:
         self.dash_logs.pack(side=tk.LEFT, padx=10)
         dash_right_frame = ttk.Frame(dash)
         dash_right_frame.pack(side=tk.RIGHT)
+        # <-- Add the MQTT status label here
+        self.mqtt_status_label = ttk.Label(dash_right_frame, textvariable=self.mqtt_status_var, font=dash_font)
+        self.mqtt_status_label.pack(anchor='e')
         ttk.Label(dash_right_frame, textvariable=self.location_var, font=dash_font).pack(anchor='e')
         ttk.Label(dash_right_frame, textvariable=self.live_weather_var, font=dash_font).pack(anchor='e')
         ttk.Label(dash_right_frame, textvariable=self.system_time_var, font=dash_font).pack(anchor='e')
@@ -566,7 +721,7 @@ class MainWindow:
         else: self.sensor_moisture.set(moisture_status)
 
         if hasattr(self, 'root') and self.root.winfo_exists():
-            self.root.after(5000, self.update_sensor_readings)
+            self.root.after(2000, self.update_sensor_readings)
 
     def show_sensor_connection_info(self):
         win = tk.Toplevel(self.root)
@@ -1277,8 +1432,31 @@ class MainWindow:
             self.update_location_data()
 
     def update_system_clock(self):
+        """
+         This method runs every second to update the main clock and now also
+         handles the live update for all active valve timers.
+         """
+         # Update the main system clock display
         self.system_time_var.set(f"Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        if hasattr(self, 'root') and self.root.winfo_exists(): self.root.after(1000, self.update_system_clock)
+
+         # --- NEW TIMER LOGIC ---
+        # Loop through all valves and update their timers if they are ON
+        for valve in self.valves:
+         if valve.get("status") and valve.get("current_on_start_time"):
+            elapsed = time.time() - valve["current_on_start_time"]
+            valve["timer_var"].set(f"ON for: {utils.format_duration(elapsed)}")
+         elif not valve.get("status") and valve["timer_var"].get() != "":
+            # If the valve is off, ensure its timer text is cleared
+            valve["timer_var"].set("")
+        # --- END OF NEW TIMER LOGIC ---
+
+        # Publish the latest state to the web UI
+        if self.mqtt_manager:
+           self.mqtt_manager.publish_state()
+
+         # Schedule this method to run again in 1 second
+        if hasattr(self, 'root') and self.root.winfo_exists():
+         self.root.after(1000, self.update_system_clock)
 
     def update_location_data(self):
         if self.api_key == "d7b8a4a58f2d8f3f8b9e8a7b9c8d7e6f": 
