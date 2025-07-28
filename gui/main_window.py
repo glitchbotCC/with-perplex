@@ -12,6 +12,8 @@ import re
 import random
 import requests
 import hashlib
+from queue import Queue
+
 
 # Local application imports
 from .. import constants, utils
@@ -32,6 +34,8 @@ class MainWindow:
     def __init__(self, root):
         self.log_window = None
         self.root = root
+        self.log_queue = Queue()
+        self.status_queue = Queue()
         self.settings = PersistentSettings()
         self.hardware = HardwareManager()
 
@@ -80,6 +84,7 @@ class MainWindow:
         self.filtered_valves = []
         self.log_window = None
         self.scheduler_window = None
+        
 
         # --- Tkinter Variables ---
         self.search_var = tk.StringVar()
@@ -107,7 +112,9 @@ class MainWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
        
         self.mqtt_manager = MqttManager(self)
-
+        self.process_log_queue()
+        self.process_status_queue()
+        
         self._activate_all_schedules()
         self.filter_valves()
         self.update_aux_controls_ui()
@@ -121,17 +128,25 @@ class MainWindow:
         self.update_lock_status_ui()
     
     def set_mqtt_status(self, status, color):
-       """Updates the MQTT status label's text and color safely on the main thread."""
-       if hasattr(self, 'mqtt_status_var') and hasattr(self, 'mqtt_status_label'):
-        self.mqtt_status_var.set(f"MQTT: {status}")
+        """Thread-safe method to request a status update. Puts the update
+        request into a queue to be processed by the main GUI thread."""
+        self.status_queue.put((status, color))
 
-        dark_colors = {"green": "#81C784", "red": "#E57373", "orange": "#FFB74D", "grey": "#90A4AE"}
-        light_colors = {"green": "#4CAF50", "red": "#D32F2F", "orange": "#FFA726", "grey": "#546E7A"}
+    def _set_mqtt_status_ui(self, status, color):
+        """
+        Private method that performs the actual UI update for the MQTT status.
+        Should only be called from the main thread.
+        """
+        if hasattr(self, 'mqtt_status_var') and hasattr(self, 'mqtt_status_label'):
+            self.mqtt_status_var.set(f"MQTT: {status}")
 
-        theme_colors = dark_colors if self.theme == "dark" else light_colors
+            dark_colors = {"green": "#81C784", "red": "#E57373", "orange": "#FFB74D", "grey": "#90A4AE"}
+            light_colors = {"green": "#4CAF50", "red": "#D32F2F", "orange": "#FFA726", "grey": "#546E7A"}
 
-        self.mqtt_status_label.config(foreground=theme_colors.get(color, self.style.lookup("TLabel", "foreground")))
+            theme_colors = dark_colors if self.theme == "dark" else light_colors
 
+            self.mqtt_status_label.config(foreground=theme_colors.get(color, self.style.lookup("TLabel", "foreground")))
+  
     def _hash_password(self, password):
         """Hashes a password using SHA-256."""
         return hashlib.sha256(password.encode('utf-8')).hexdigest()
@@ -1351,19 +1366,54 @@ class MainWindow:
         self.render_valves_grid()
         self.update_dashboard()
 
+    # ADD THESE THREE METHODS
+    def process_log_queue(self):
+        """Processes messages from the thread-safe log queue."""
+        try:
+            while not self.log_queue.empty():
+                msg = self.log_queue.get_nowait()
+                self._log_to_ui(msg)  
+        except Exception:
+            pass # Ignore if queue is empty
+        self.root.after(100, self.process_log_queue)
+
+
+    def process_status_queue(self):
+        """Processes status updates from the thread-safe status queue."""
+        try:
+            while not self.status_queue.empty():
+                status, color = self.status_queue.get_nowait()
+                self._set_mqtt_status_ui(status, color)
+        except Exception:
+            pass # Ignore if queue is empty
+        self.root.after(200, self.process_status_queue)
+
     def log(self, msg):
+        """
+        Thread-safe logging method. Puts a message into a queue
+        to be processed by the main GUI thread.
+        """
+        self.log_queue.put(msg)
+
+    def _log_to_ui(self, msg):
+        """
+        The original log logic, now private. It should only be called
+        by the main thread via process_log_queue.
+        """
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         entry = f"[{ts}] {msg}"
         self.logs.append(entry)
         if len(self.logs) > 500: self.logs = self.logs[-300:]
-        if self.log_window and self.log_window.winfo_exists(): self.log_window.add_log_entry(entry)
-        if hasattr(self, 'dash_logs') and self.dash_logs.winfo_exists(): self.update_dashboard()
+        if self.log_window and self.log_window.winfo_exists():
+            self.log_window.add_log_entry(entry)
+        if hasattr(self, 'dash_logs') and self.dash_logs.winfo_exists():
+            self.update_dashboard()
 
     def notify(self, msg, duration=3500):
-        if not hasattr(self, 'footer_label') or not self.footer_label.winfo_exists(): return
-        self.footer_label.config(text=f"🔔 {msg}", foreground=self.style.lookup("Accent.TButton", "background"))
-        if hasattr(self, '_notify_job_id'): self.root.after_cancel(self._notify_job_id)
-        self._notify_job_id = self.root.after(duration, self._clear_notify_message)
+            if not hasattr(self, 'footer_label') or not self.footer_label.winfo_exists(): return
+            self.footer_label.config(text=f"🔔 {msg}", foreground=self.style.lookup("Accent.TButton", "background"))
+            if hasattr(self, '_notify_job_id'): self.root.after_cancel(self._notify_job_id)
+            self._notify_job_id = self.root.after(duration, self._clear_notify_message)
 
     def _clear_notify_message(self):
         if hasattr(self, 'footer_label') and self.footer_label.winfo_exists():
