@@ -1,517 +1,120 @@
-# smart_farm/gui/main_window.py
+# smart_farm/gui/mqtt_manager.py
 
-# Standard library imports
-import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, filedialog
-import json
-import datetime
-import os
-import sys
-import time
-import re
-import random
-import requests
-import hashlib
-import threading
-
-# --- MQTT Integration ---
-# Required library: pip install paho-mqtt
 import paho.mqtt.client as mqtt
+import json
+import random
+import threading
+import certifi # <-- 1. IMPORT THE NEW LIBRARY
 
-# Local application imports
-from .. import constants, utils
-from ..settings_manager import PersistentSettings
-from ..hardware_manager import HardwareManager
+class MqttManager:
+    """
+    Handles all MQTT communication for the Smart Farm application.
+    It connects to the broker, publishes state changes, and listens for commands
+    from the web interface.
+    """
+    def __init__(self, main_app):
+        """
+        Initializes the MQTT Manager. The connection logic is run in a separate
+        thread to prevent blocking the main GUI thread.
 
-# GUI window imports
-from .settings_windows import AppSettingsWindow, ValveSettingsWindow
-from .scheduler_window import SchedulerWindow
-from .automation_window import AutomationWindow
-from .log_window import LogWindow
-from .auth_dialog import AuthDialog
-
-
-class MainWindow:
-    """Main application class for Smart Farm Valve Control."""
-    def __init__(self, root):
-        self.log_window = None
-        self.root = root
-        self.settings = PersistentSettings()
-        self.hardware = HardwareManager()
-
-        # --- Load settings and initialize state ---
-        self.logs = self.settings.get("logs", [])
+        Args:
+            main_app: A reference to the main MainWindow instance.
+        """
+        self.main_app = main_app
+        self.client = None
         
-        self.theme = self.settings.get("theme", "dark")
-        self.location = self.settings.get("location", "London,UK")
-        self.api_key = constants.API_KEY
-        
-        # Auth and Lock state
-        self.is_config_locked = tk.BooleanVar(value=self.settings.get("config_locked", False))
-        self.admin_user = self.settings.get("admin_user")
-        self.admin_pass_hash = self.settings.get("admin_pass_hash")
-
-        self.valves = self.settings.get("valves", [])
-        self.aux_controls = self.settings.get("aux_controls", [])
-        self.automation_rules = self.settings.get("automation_rules", [])
-        self.schedule_history = self.settings.get("schedule_history", [])
-
-        self._migrate_schedule_data()
-
-        for v in self.valves:
-            self._initialize_valve_data(v)
-
-        default_aux_controls = [{"id": f"aux_{i}", "name": f"AUX {i+1}", "pin": pin, "status": False, "schedules": []} for i, pin in enumerate(constants.EXTRA_GPIO_PINS)]
-        loaded_aux = self.settings.get("aux_controls")
-        valid_pins = True
-        if isinstance(loaded_aux, list) and len(loaded_aux) == len(constants.EXTRA_GPIO_PINS):
-            loaded_pin_set = {c.get("pin") for c in loaded_aux}
-            default_pin_set = set(constants.EXTRA_GPIO_PINS)
-            if loaded_pin_set != default_pin_set:
-                valid_pins = False
-        else:
-            valid_pins = False
-        if valid_pins:
-            self.aux_controls = loaded_aux
-        else:
-            if loaded_aux is not None: self.log("Invalid 'aux_controls' in settings, resetting to defaults.")
-            self.aux_controls = default_aux_controls
-
-        self.undo_stack = []
-        self.style = ttk.Style()
-        self.scheduled_jobs = {}
-        self.filtered_valves = []
-        self.log_window = None
-        self.scheduler_window = None
-
-        # --- Tkinter Variables ---
-        self.search_var = tk.StringVar()
-        self.valve_count_var = tk.StringVar(value="1")
-        self.location_var = tk.StringVar(value=f"Location: {self.location}")
-        self.system_time_var = tk.StringVar(value="Time: --:--:--")
-        self.live_weather_var = tk.StringVar(value="Weather: Fetching...")
-        self.sensor_temp_c = tk.StringVar(value="N/A")
-        self.sensor_humidity = tk.StringVar(value="N/A")
-        self.sensor_temp_c_dht11 = tk.StringVar(value="N/A")
-        self.sensor_humidity_dht11 = tk.StringVar(value="N/A")
-        self.sensor_moisture = tk.StringVar(value="N/A")
-
-        # --- Initial Setup Calls ---
-        self.apply_theme()
-        self.setup_ui()
-        self.bind_shortcuts()
-
-        self.root.title(f"🌱 {constants.APP_NAME} v{constants.APP_VERSION}")
-        self.root.geometry("1350x850")
-        self.root.minsize(1100, 700)
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        # --- MQTT Integration Setup ---
-        self.mqtt_client = None
-        self._setup_mqtt()
-
-        self._activate_all_schedules()
-        self.filter_valves()
-        self.update_aux_controls_ui()
-        self.update_dashboard()
-        self._start_status_dot_animations()
-        self.update_system_clock()
-        self.update_sensor_readings()
-        self.update_location_data()
-        self.check_automation_rules()
-        self.log("Application initialized successfully.")
-        self.update_lock_status_ui()
-        self.publish_state()
-
-    # #################################################################
-    # #################### MQTT INTEGRATION ###########################
-    # #################################################################
+        mqtt_thread = threading.Thread(target=self._setup_mqtt, daemon=True)
+        mqtt_thread.start()
 
     def _setup_mqtt(self):
-        """Initializes and connects the MQTT client in a background thread."""
+        """
+        Initializes the Paho MQTT client, sets credentials, defines callbacks,
+        and connects to the broker. This method runs in its own thread.
+        """
         try:
-            self.mqtt_client = mqtt.Client(client_id=f"smartfarm-pi-app-{random.randint(1000, 9999)}", protocol=mqtt.MQTTv311)
-            self.mqtt_client.on_connect = self._on_mqtt_connect
-            self.mqtt_client.on_message = self._on_mqtt_message
+            client_id = f"smartfarm-pi-app-{random.randint(1000, 9999)}"
+            self.client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+
+            self.client.on_connect = self._on_connect
+            self.client.on_message = self._on_message
+            self.client.on_disconnect = self._on_disconnect
             
-            # --- IMPORTANT: Use the same credentials as your web app ---
-            self.mqtt_client.username_pw_set("glitchbothive", "hive1Aaa")
+            self.client.username_pw_set("glitchbothive", "hive1Aaa")
             
             broker_address = "10c4099f97f641fbab2858a037337cbd.s1.eu.hivemq.cloud"
-            port = 8883 # Use 8883 for TLS, not 8884
-            self.mqtt_client.tls_set()
+            port = 8883
+            
+            # --- 2. THIS IS THE CRITICAL CHANGE ---
+            # Explicitly tell the client to use the certificates from the certifi library.
+            self.client.tls_set(certifi.where())
 
-            self.mqtt_client.connect(broker_address, port, 60)
-            self.mqtt_client.loop_start() # Starts a background thread for MQTT
-            self.log("MQTT client setup initiated.")
+            self.main_app.log("Attempting to connect to MQTT broker...")
+            self.main_app.set_mqtt_status("Connecting...", "orange")
+            
+            self.client.connect(broker_address, port, 60)
+            self.client.loop_forever()
+            
         except Exception as e:
-            self.log(f"MQTT setup failed: {e}")
+            self.main_app.log(f"MQTT setup failed: {e}")
+            self.main_app.set_mqtt_status("Setup Failed", "red")
 
-    def _on_mqtt_connect(self, client, userdata, flags, rc):
-        """Callback for when the MQTT client connects to the broker."""
+    def _on_connect(self, client, userdata, flags, rc):
+        """
+        Callback executed when the client connects to the MQTT broker.
+        """
         if rc == 0:
-            self.log("MQTT successfully connected to HiveMQ broker.")
-            # Subscribe to topics where the web UI will send commands
-            client.subscribe("smartfarm/web/command")
-            client.subscribe("smartfarm/system/sync")
-            # Publish initial state upon connection
+            self.main_app.log("MQTT successfully connected to HiveMQ broker.")
+            client.subscribe("smartfarm/web/command", qos=1)
+            client.subscribe("smartfarm/system/sync", qos=1)
             self.publish_state()
+            self.main_app.set_mqtt_status("Connected", "green")
         else:
-            self.log(f"MQTT connection failed with code {rc}")
+            self.main_app.log(f"MQTT connection failed with code {rc}")
+            self.main_app.set_mqtt_status(f"Failed (Code: {rc})", "red")
 
-    def _on_mqtt_message(self, client, userdata, msg):
-        """Callback for handling incoming MQTT messages from the web UI."""
+    def _on_disconnect(self, client, userdata, rc):
+        """Callback for when the client disconnects from the broker."""
+        self.main_app.log("MQTT client disconnected.")
+        self.main_app.set_mqtt_status("Disconnected", "red")
+
+    def _on_message(self, client, userdata, msg):
+        """
+        Callback executed when a message is received from a subscribed topic.
+        """
         try:
             payload = json.loads(msg.payload.decode())
-            command = payload.get("command")
-            data = payload.get("data", {})
-            self.log(f"Received MQTT command: {command}")
-
-            # This ensures UI updates from MQTT happen on the main Tkinter thread
-            self.root.after(0, self._process_mqtt_command, command, data)
             
-        except json.JSONDecodeError:
-            self.log(f"MQTT received malformed JSON on topic {msg.topic}")
-        except Exception as e:
-            self.log(f"Error processing MQTT message: {e}")
-
-    def _process_mqtt_command(self, command, data):
-        """Processes the received command from MQTT on the main thread."""
-        if command == "toggle_valve":
-            if "index" in data and 0 <= data["index"] < len(self.valves):
-                self.toggle_valve(data["index"])
-        
-        elif command == "toggle_aux":
-            if "index" in data and 0 <= data["index"] < len(self.aux_controls):
-                self.toggle_aux_control(data["index"])
-
-        elif command == "add_valves":
-            if not self.is_config_locked.get():
-                count = data.get("count", 1)
-                self.valve_count_var.set(str(count))
-                self.add_valves()
-            else:
-                self.log("MQTT command 'add_valves' blocked: Configuration is locked.")
-
-        elif command == "remove_valve":
-            if not self.is_config_locked.get() and "index" in data:
-                # Bypassing the confirmation dialog for web commands
-                self.clear_all_schedules_for_item("valve", data["index"])
-                valve = self.valves[data["index"]]
-                self.hardware.set_pin_state(valve['pin'], False)
-                rem_copy = self.valves.pop(data["index"])
-                self.undo_stack.append(rem_copy.copy())
-                self.log(f"Valve '{rem_copy['name']}' removed via web UI.")
-                self.save_state()
-                self.filter_valves()
-                self.update_dashboard()
-        
-        elif command == "rename_item":
-            if not self.is_config_locked.get() and "type" in data and "index" in data and "newName" in data:
-                item_list = self.valves if data['type'] == 'valve' else self.aux_controls
-                item = item_list[data['index']]
-                item['name'] = data['newName']
-                self.save_state()
-                if data['type'] == 'valve': self.filter_valves()
-                else: self.update_aux_controls_ui()
-
-        elif command == "edit_note":
-             if "index" in data and "newNote" in data:
-                self.valves[data['index']]['note'] = data['newNote']
-                self.save_state()
-                self.filter_valves()
-        
-        elif command == "toggle_valve_lock":
-            if "index" in data:
-                self.toggle_lock(data['index'])
-
-        elif command == "emergency_stop":
-            # Bypassing confirmation dialog for web command
-            self.turn_all_systems_off(from_web=True)
-            
-        elif command == "toggle_lock":
-            # This is a complex command that handles locking/unlocking
-            if self.is_config_locked.get(): # Trying to unlock
-                password = data.get("password")
-                if password and self._hash_password(password) == self.admin_pass_hash:
-                    self.is_config_locked.set(False)
-                    self.settings.set("config_locked", False)
-                    self.log("Configuration Unlocked via web UI.")
-                else:
-                    self.log("Failed web UI unlock attempt.")
-            else: # Trying to lock
-                if data.get("is_setting_credentials"): # First time lock
-                    self.admin_user = data["username"]
-                    self.admin_pass_hash = self._hash_password(data["password"])
-                    self.settings.set("admin_user", self.admin_user)
-                    self.settings.set("admin_pass_hash", self.admin_pass_hash)
-                    self.log("Admin credentials set via web UI.")
-                
-                self.is_config_locked.set(True)
-                self.settings.set("config_locked", True)
-                self.log("Configuration Locked via web UI.")
-            self.update_lock_status_ui()
-
-        # Handle sync request from a newly connected web client
-        if msg.topic == "smartfarm/system/sync" and payload.get("action") == "request_sync":
-            self.log(f"Sync request received from {payload.get('from')}. Publishing full state.")
-            self.publish_state()
-
-    def _get_current_state_as_dict(self):
-        """Aggregates the entire application state into a single dictionary for publishing."""
-        # Create a clean, serializable copy of the valves list
-        valves_copy = []
-        for v in self.valves:
-            v_copy = v.copy()
-            v_copy.pop("timer_var", None) # Remove non-serializable Tkinter variable
-            valves_copy.append(v_copy)
-
-        sensors_data = {
-            'Temp (DHT22)': self.sensor_temp_c.get(),
-            'Humidity (DHT22)': self.sensor_humidity.get(),
-            'Temp (DHT11)': self.sensor_temp_c_dht11.get(),
-            'Humidity (DHT11)': self.sensor_humidity_dht11.get(),
-            'Soil Moisture': self.sensor_moisture.get()
-        }
-
-        settings_data = {
-            'location': self.location,
-            'virtual_sunrise_time': self.settings.get("virtual_sunrise_time"),
-            'virtual_sunset_time': self.settings.get("virtual_sunset_time"),
-            'enable_rain_skip': self.settings.get("enable_rain_skip"),
-            'config_locked': self.is_config_locked.get(),
-            'admin_user': self.admin_user,
-            # Do NOT send the hash to the client for security
-        }
-
-        state_payload = {
-            "valves": valves_copy,
-            "aux_controls": self.aux_controls,
-            "automation_rules": self.automation_rules,
-            "schedule_history": self.schedule_history,
-            "logs": self.logs[-100:],  # Send recent 100 logs to avoid large payload
-            "settings": settings_data,
-            "sensors": sensors_data,
-            "live_weather": self.live_weather_var.get(),
-            "system_time": self.system_time_var.get(),
-            "theme": self.theme
-        }
-        return state_payload
-
-    def publish_state(self):
-        """Publishes the entire application state to the MQTT broker."""
-        if self.mqtt_client and self.mqtt_client.is_connected():
-            try:
-                state_dict = self._get_current_state_as_dict()
-                payload = json.dumps(state_dict, indent=4)
-                self.mqtt_client.publish("smartfarm/pi/state", payload, qos=1, retain=True)
-            except TypeError as e:
-                self.log(f"MQTT Publish Error: Could not serialize state - {e}")
-            except Exception as e:
-                self.log(f"MQTT Publish Error: {e}")
-
-    # #################################################################
-    # ############## END OF MQTT INTEGRATION ##########################
-    # #################################################################
-
-    def _hash_password(self, password):
-        """Hashes a password using SHA-256."""
-        return hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-    def toggle_configuration_lock(self):
-        """Handles the logic for locking or unlocking the configuration."""
-        if self.is_config_locked.get():
-            # UNLOCKING
-            if not self.admin_user:
-                self.notify("No credentials set. Cannot unlock.", 4000)
+            if msg.topic == "smartfarm/system/sync" and payload.get("action") == "request_sync":
+                self.main_app.log(f"Sync request received from {payload.get('from')}. Publishing full state.")
+                self.publish_state()
                 return
 
-            dialog = AuthDialog(self, is_setting_credentials=False)
-            creds = dialog.result
-
-            if creds and creds["username"] == self.admin_user and self._hash_password(creds["password"]) == self.admin_pass_hash:
-                self.is_config_locked.set(False)
-                self.settings.set("config_locked", False)
-                self.log("Configuration Unlocked.")
-                self.notify("Configuration Unlocked.", 3000)
-            elif creds:
-                messagebox.showerror("Authentication Failed", "Invalid username or password.", parent=self.root)
-                self.log("Failed unlock attempt.")
-        else:
-            # LOCKING
-            if not self.admin_user:
-                if messagebox.askyesno("Set Credentials", "No admin credentials found. Do you want to set them now to lock the configuration?", parent=self.root):
-                    dialog = AuthDialog(self, is_setting_credentials=True)
-                    creds = dialog.result
-                    if creds:
-                        self.admin_user = creds["username"]
-                        self.admin_pass_hash = self._hash_password(creds["password"])
-                        self.settings.set("admin_user", self.admin_user)
-                        self.settings.set("admin_pass_hash", self.admin_pass_hash)
-                        self.log("Admin credentials set.")
-                    else:
-                        return # User cancelled setting credentials
+            if msg.topic == "smartfarm/web/command":
+                command = payload.get("command")
+                data = payload.get("data", {})
+                self.main_app.log(f"Received MQTT command: {command}")
+                self.main_app.root.after(0, self.main_app._process_mqtt_command, command, data)
             
-            self.is_config_locked.set(True)
-            self.settings.set("config_locked", True)
-            self.log("Configuration Locked.")
-            self.notify("Configuration Locked.", 3000)
-        
-        self.update_lock_status_ui()
-        self.publish_state() # Publish state change
-        
-    def update_lock_status_ui(self):
-        """Updates the UI elements based on the lock state."""
-        is_locked = self.is_config_locked.get()
-        lock_text = "Unlock Config 🔓" if is_locked else "Lock Config 🔒"
-        lock_tip = "Unlock the configuration" if is_locked else "Lock the configuration to prevent adding/removing valves"
-        
-        if hasattr(self, 'lock_btn_footer'):
-            self.lock_btn_footer.config(text=lock_text)
-            utils.tooltip(self.lock_btn_footer, lock_tip)
+        except Exception as e:
+            self.main_app.log(f"Error processing MQTT message: {e}")
 
-        state = "disabled" if is_locked else "normal"
-        if hasattr(self, 'valve_entry'):
-            self.valve_entry.config(state=state)
-            self.add_valves_btn.config(state=state)
-            self.reset_valves_btn.config(state=state)
-            self.filter_valves()
+    def publish_state(self):
+        """
+        Publishes the entire application state to the MQTT broker.
+        """
+        if self.client and self.client.is_connected():
+            try:
+                state_dict = self.main_app._get_current_state_as_dict()
+                payload = json.dumps(state_dict, indent=4)
+                self.client.publish("smartfarm/pi/state", payload, qos=1, retain=True)
+            except Exception as e:
+                self.main_app.log(f"MQTT Publish Error: {e}")
 
-    def _initialize_valve_data(self, valve_dict):
-        """Sets default keys and the timer variable for a valve dictionary."""
-        valve_dict.setdefault("flow_rate_lpm", 0.0)
-        valve_dict.setdefault("estimated_water_usage_liters", 0.0)
-        valve_dict.setdefault("total_on_time_seconds", 0)
-        valve_dict.setdefault("last_on_timestamp", None)
-        valve_dict.setdefault("last_on_duration_seconds", None)
-        valve_dict.setdefault("current_on_start_time", None)
-        valve_dict.setdefault("schedules", [])
-        valve_dict.setdefault("history", [])
-        valve_dict.setdefault("note", "")
-        valve_dict.setdefault("locked", False)
-        valve_dict.setdefault("icon", "💧")
-        valve_dict["timer_var"] = tk.StringVar(value="")
-
-    def _migrate_schedule_data(self):
-        """One-time migration of old schedule_str to new schedules list."""
-        migrated = False
-        for item in self.valves + self.aux_controls:
-            if "schedule_str" in item and item["schedule_str"]:
-                migrated = True
-                # ... (rest of migration logic is unchanged)
-        if migrated:
-            self.log("Migrated old schedule data to new format.")
-            self.save_state()
-
-    def _start_status_dot_animations(self):
-        self._animate_status_dots()
-
-    def _animate_status_dots(self):
-        if not hasattr(self, 'root') or not self.root.winfo_exists():
-            return
-        # ... (animation logic is unchanged)
-        self.root.after(750, self._animate_status_dots)
-
-    # ... (all other methods like open_app_settings_window, setup_ui, etc., remain the same) ...
-    # ... The only change is to add self.publish_state() where needed.
-
-    def save_state(self):
-        """Prepares a clean copy of the data and saves it to the settings file."""
-        valves_to_save = [v.copy() for v in self.valves]
-        for v in valves_to_save:
-            v.pop("timer_var", None)
-            
-        self.settings.set("valves", valves_to_save)
-        self.settings.set("aux_controls", self.aux_controls)
-        self.settings.set("automation_rules", self.automation_rules)
-        self.settings.set("schedule_history", self.schedule_history)
-        self.settings.set("logs", self.logs)
-        self.publish_state() # Publish state after every save
-
-    def on_close(self):
-        self.log("Application closing. Saving state.")
-        self.save_state()
-        self.hardware.cleanup()
-        if self.mqtt_client:
-            self.mqtt_client.loop_stop() # Stop the MQTT background thread
-            self.mqtt_client.disconnect()
-            self.log("MQTT client disconnected.")
-        for job_id in self.root.tk.call('after', 'info'):
-            self.root.after_cancel(job_id)
-        self.root.destroy()
-
-    def toggle_valve(self, idx, duration_min=None):
-        self.toggle_item(idx, "valve", duration_min=duration_min)
-
-    def toggle_aux_control(self, idx):
-        self.toggle_item(idx, "aux")
-
-    def toggle_item(self, idx, item_type, is_on=None, duration_min=None):
-        # ... (method logic unchanged)
-        self.save_state()
-        if item_type == "valve": self.filter_valves()
-        else: self.update_aux_controls_ui()
-        self.update_dashboard()
-        # self.publish_state() is called by save_state()
-
-    def add_valves(self):
-        # ... (method logic unchanged)
-        self.save_state()
-        self.filter_valves()
-        self.notify(f"Successfully added {count} valve(s).")
-        self.update_dashboard()
-        # self.publish_state() is called by save_state()
-    
-    def remove_valve(self, idx):
-        # ... (method logic unchanged)
-        self.save_state()
-        self.filter_valves()
-        self.notify(f"Valve '{rem_copy['name']}' removed.")
-        self.update_dashboard()
-        # self.publish_state() is called by save_state()
-
-    def turn_all_systems_off(self, from_web=False):
-        if not from_web and not messagebox.askyesno("Confirm Emergency Stop", "Turn OFF all valves and auxiliary controls immediately?\n\nSchedules remain unaffected.", icon='warning', parent=self.root): return
-        # ... (method logic unchanged)
-        if off_count > 0:
-            self.save_state()
-            self.filter_valves()
-            # ...
-        # self.publish_state() is called by save_state()
-
-    def log(self, msg):
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"[{ts}] {msg}"
-        self.logs.append(entry)
-        if len(self.logs) > 500: self.logs = self.logs[-300:]
-        if self.log_window and self.log_window.winfo_exists(): self.log_window.add_log_entry(entry)
-        if hasattr(self, 'dash_logs') and self.dash_logs.winfo_exists(): self.update_dashboard()
-        # Do not publish state on every log to avoid flooding, only on state changes.
-
-    def update_dashboard(self):
-        # ... (method logic unchanged)
-        self.publish_state() # Publish state on dashboard refresh
-
-    def update_sensor_readings(self):
-        # ... (method logic unchanged)
-        self.publish_state() # Publish new sensor data
-        if hasattr(self, 'root') and self.root.winfo_exists():
-            self.root.after(5000, self.update_sensor_readings)
-
-    def update_system_clock(self):
-        self.system_time_var.set(f"Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.publish_state() # Publish new time
-        if hasattr(self, 'root') and self.root.winfo_exists():
-            self.root.after(1000, self.update_system_clock)
-
-    def update_location_data(self):
-        # ... (method logic unchanged)
-        self.publish_state() # Publish new weather/location data
-        if hasattr(self, 'root') and self.root.winfo_exists():
-            self.root.after(600000, self.update_location_data)
-
-    # --- Add publish_state() to all other state-modifying functions ---
-    # e.g., rename_valve, reset_valves, import_config, toggle_lock, edit_note,
-    # set_schedule_for_item, clear_schedule_by_id, etc.
-    # The simplest way is to ensure any call to self.save_state() also calls self.publish_state(),
-    # which I have already done above.
+    def disconnect(self):
+        """
+        Cleanly disconnects the MQTT client.
+        """
+        if self.client:
+            self.client.loop_stop()
+            self.client.disconnect()
+            self.main_app.log("MQTT client disconnected.")
