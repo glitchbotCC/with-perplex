@@ -34,8 +34,6 @@ class MainWindow:
     def __init__(self, root):
         self.log_window = None
         self.root = root
-        self.log_queue = Queue()
-        self.status_queue = Queue()
         self.settings = PersistentSettings()
         self.hardware = HardwareManager()
 
@@ -84,7 +82,8 @@ class MainWindow:
         self.filtered_valves = []
         self.log_window = None
         self.scheduler_window = None
-        
+        self.log_queue = Queue()
+        self.status_queue = Queue()
 
         # --- Tkinter Variables ---
         self.search_var = tk.StringVar()
@@ -180,6 +179,81 @@ class MainWindow:
                 self.save_state()
                 self.filter_valves()
                 self.update_dashboard()
+        
+        elif command == "rename_item":
+            if not self.is_config_locked.get() and "type" in data and "index" in data and "newName" in data:
+                item_list = self.valves if data['type'] == 'valve' else self.aux_controls
+                item = item_list[data['index']]
+                item['name'] = data['newName']
+                self.save_state()
+                if data['type'] == 'valve': self.filter_valves()
+                else: self.update_aux_controls_ui()
+
+        elif command == "edit_note":
+             if "index" in data and "newNote" in data:
+                self.valves[data['index']]['note'] = data['newNote']
+                self.save_state()
+                self.filter_valves()
+        
+        elif command == "toggle_valve_lock":
+            if "index" in data:
+                self.toggle_lock(data['index'])
+
+        elif command == "emergency_stop":
+            self.turn_all_systems_off(from_web=True)
+            
+        elif command == "set_schedule":
+            if "item_type" in data and "item_idx" in data and "details" in data:
+                self.log(f"Received web command to set schedule for {data['item_type']} at index {data['item_idx']}")
+                self.set_schedule_for_item(
+                    item_type=data['item_type'],
+                    item_idx=data['item_idx'],
+                    schedule_id=None, # Web UI doesn't support editing yet
+                    details=data['details']
+                )
+        
+        elif command == "remove_schedule":
+            if "id" in data and data["id"]:
+                self.log(f"Received web command to remove schedule ID: {data['id']}")
+                self.clear_schedule_by_id(data['id'])
+        
+        elif command == "add_automation_rule":
+            if isinstance(data, dict):
+                self.log(f"Received web command to add automation rule.")
+                self.automation_rules.append(data)
+                self.save_state()
+
+        elif command == "remove_automation_rule":
+            if "index" in data and isinstance(data["index"], int):
+                index = data["index"]
+                if 0 <= index < len(self.automation_rules):
+                    self.log(f"Received web command to remove automation rule at index: {index}")
+                    self.automation_rules.pop(index)
+                    self.save_state()
+                else:
+                    self.log(f"Invalid index for remove_automation_rule: {index}")
+
+        elif command == "toggle_lock":
+            if self.is_config_locked.get(): # Trying to unlock
+                password = data.get("password")
+                if password and self._hash_password(password) == self.admin_pass_hash:
+                    self.is_config_locked.set(False)
+                    self.settings.set("config_locked", False)
+                    self.log("Configuration Unlocked via web UI.")
+                else:
+                    self.log("Failed web UI unlock attempt.")
+            else: # Trying to lock
+                if data.get("is_setting_credentials"):
+                    self.admin_user = data["username"]
+                    self.admin_pass_hash = self._hash_password(data["password"])
+                    self.settings.set("admin_user", self.admin_user)
+                    self.settings.set("admin_pass_hash", self.admin_pass_hash)
+                    self.log("Admin credentials set via web UI.")
+                
+                self.is_config_locked.set(True)
+                self.settings.set("config_locked", True)
+                self.log("Configuration Locked via web UI.")
+            self.update_lock_status_ui()
         
         elif command == "rename_item":
             if not self.is_config_locked.get() and "type" in data and "index" in data and "newName" in data:
@@ -1409,7 +1483,7 @@ class MainWindow:
         if hasattr(self, 'dash_logs') and self.dash_logs.winfo_exists():
             self.update_dashboard()
 
-    def notify(self, msg, duration=3500):
+        def notify(self, msg, duration=3500):
             if not hasattr(self, 'footer_label') or not self.footer_label.winfo_exists(): return
             self.footer_label.config(text=f"🔔 {msg}", foreground=self.style.lookup("Accent.TButton", "background"))
             if hasattr(self, '_notify_job_id'): self.root.after_cancel(self._notify_job_id)
