@@ -3,6 +3,7 @@
 # Standard library imports
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
+from PIL import Image, ImageTk
 import json
 import datetime
 import os
@@ -27,6 +28,61 @@ from .scheduler_window import SchedulerWindow
 from .automation_window import AutomationWindow
 from .log_window import LogWindow
 from .auth_dialog import AuthDialog
+
+
+
+class AssignValveDialog(tk.Toplevel):
+    """A custom dialog to name a new map section and assign a valve."""
+    def __init__(self, master, available_valves):
+        super().__init__(master)
+        self.transient(master)
+        self.title("Assign Valve to Section")
+        self.result = None
+        
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # --- Name Entry ---
+        ttk.Label(main_frame, text="Zone Name:").pack(anchor="w")
+        self.name_var = tk.StringVar()
+        self.name_entry = ttk.Entry(main_frame, textvariable=self.name_var, width=40)
+        self.name_entry.pack(fill="x", pady=(0, 15))
+        self.name_entry.focus_set()
+
+        # --- Valve Selection ---
+        ttk.Label(main_frame, text="Assign Valve:").pack(anchor="w")
+        self.valve_var = tk.StringVar()
+        self.valve_combo = ttk.Combobox(main_frame, textvariable=self.valve_var, 
+                                        values=list(available_valves.keys()), state="readonly")
+        if available_valves:
+            self.valve_combo.current(0)
+        self.valve_combo.pack(fill="x", pady=(0, 20))
+        self.available_valves = available_valves
+
+        # --- Buttons ---
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill="x")
+        ok_button = ttk.Button(button_frame, text="Assign", command=self._on_ok, style="Accent.TButton")
+        ok_button.pack(side="right")
+        cancel_button = ttk.Button(button_frame, text="Cancel", command=self._on_cancel)
+        cancel_button.pack(side="right", padx=(0, 5))
+
+        self.wait_window(self)
+
+    def _on_ok(self):
+        zone_name = self.name_var.get().strip()
+        selected_valve_display = self.valve_var.get()
+        if not zone_name or not selected_valve_display:
+            messagebox.showerror("Error", "Both a name and a valve must be selected.", parent=self)
+            return
+        
+        valve_index = self.available_valves[selected_valve_display]
+        self.result = {"name": zone_name, "valve_index": valve_index}
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
 
 
 class MainWindow:
@@ -688,18 +744,26 @@ class MainWindow:
         self.emergency_off_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
         utils.tooltip(self.emergency_off_btn, "Immediately turns OFF all valves and aux controls.")
 
+        # Create a PanedWindow to hold the main content and the right-side panel
         self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL, style="TPanedwindow")
         self.main_pane.pack(fill=tk.BOTH, expand=True, padx=30, pady=(0, 10))
+        
+        # --- Create a Notebook (Tabs) for the main left-side view ---
+        self.notebook = ttk.Notebook(self.main_pane, style="TNotebook")
+        self.main_pane.add(self.notebook, weight=1)
 
-        valves_lf = ttk.Labelframe(self.main_pane, text="Configured Irrigation Valves", style="Card.TFrame", padding=10)
-        self.main_pane.add(valves_lf, weight=1)
-        valves_lf.rowconfigure(0, weight=1)
-        valves_lf.columnconfigure(0, weight=1)
-        self.valve_canvas = tk.Canvas(valves_lf, bg=self.style.lookup("Card.TFrame", "background"), highlightthickness=0)
-        self.valve_vbar = ttk.Scrollbar(valves_lf, orient="vertical", command=self.valve_canvas.yview)
+        # --- Tab 1: Card View ---
+        card_view_frame = ttk.Frame(self.notebook, style="TFrame", padding=10)
+        self.notebook.add(card_view_frame, text=" 💳 Card View ")
+        card_view_frame.rowconfigure(0, weight=1)
+        card_view_frame.columnconfigure(0, weight=1)
+
+        self.valve_canvas = tk.Canvas(card_view_frame, bg=self.style.lookup("Card.TFrame", "background"), highlightthickness=0)
+        self.valve_vbar = ttk.Scrollbar(card_view_frame, orient="vertical", command=self.valve_canvas.yview)
         self.valve_canvas.configure(yscrollcommand=self.valve_vbar.set)
-        self.valve_card_frame = ttk.Frame(self.valve_canvas, style="TFrame")
+        self.valve_card_frame = ttk.Frame(self.valve_canvas, style="TFrame") # This frame holds the valve cards
         self.canvas_frame_id = self.valve_canvas.create_window((0, 0), window=self.valve_card_frame, anchor="nw")
+        
         self.valve_vbar.grid(row=0, column=1, sticky="ns")
         self.valve_canvas.grid(row=0, column=0, sticky="nsew")
         self.valve_canvas.bind("<Configure>", self.on_valve_canvas_configure)
@@ -708,6 +772,11 @@ class MainWindow:
         self.valve_canvas.bind_all("<Button-4>", lambda e: self.valve_canvas.yview_scroll(-1, "units"))
         self.valve_canvas.bind_all("<Button-5>", lambda e: self.valve_canvas.yview_scroll(1, "units"))
         self.valve_status_labels = []
+
+        # --- Tab 2: Map View ---
+        # Call the setup method we created, which returns the map frame
+        map_view_frame = self._setup_map_view()
+        self.notebook.add(map_view_frame, text=" 🗺️ Map View ")
 
         right_column_frame = ttk.Frame(self.main_pane, style="TFrame")
         self.main_pane.add(right_column_frame, weight=0)
@@ -1289,6 +1358,10 @@ class MainWindow:
         else: self.update_aux_controls_ui()
         self.update_dashboard()
 
+        # If the map view exists, redraw it to reflect the status change
+        if hasattr(self, 'map_canvas') and self.map_canvas.winfo_exists():
+            self._draw_map_sections()
+
     def rename_aux_control(self, idx):
         aux = self.aux_controls[idx]
         old_name = aux['name']
@@ -1483,7 +1556,7 @@ class MainWindow:
         if hasattr(self, 'dash_logs') and self.dash_logs.winfo_exists():
             self.update_dashboard()
 
-        def notify(self, msg, duration=3500):
+    def notify(self, msg, duration=3500):
             if not hasattr(self, 'footer_label') or not self.footer_label.winfo_exists(): return
             self.footer_label.config(text=f"🔔 {msg}", foreground=self.style.lookup("Accent.TButton", "background"))
             if hasattr(self, '_notify_job_id'): self.root.after_cancel(self._notify_job_id)
@@ -1615,6 +1688,280 @@ class MainWindow:
             for schedule in item.get("schedules", []):
                 if schedule['id'] == schedule_id: return schedule, item
         return None, None
+    
+    def _setup_map_view(self):
+        """Creates the UI for the Map View feature with scrollbars and edit controls."""
+        # Initialize instance variables for drawing/editing state
+        self.is_in_draw_mode = False
+        self.is_in_edit_mode = False
+        self.current_polygon_points = []
+        self.temp_draw_items = []
+
+        # This frame will hold the map canvas and buttons
+        self.map_view_frame = ttk.Frame(self.notebook, style="TFrame")
+        # Configure grid layout for canvas and scrollbars
+        self.map_view_frame.rowconfigure(1, weight=1)
+        self.map_view_frame.columnconfigure(0, weight=1)
+        
+        # --- Map Control Buttons ---
+        map_controls = ttk.Frame(self.map_view_frame, style="TFrame", padding=5)
+        map_controls.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        upload_btn = ttk.Button(map_controls, text="📂 Upload Map Image", command=self._upload_map_image)
+        upload_btn.pack(side=tk.LEFT, padx=5)
+        
+        draw_btn = ttk.Button(map_controls, text="✏️ Draw New Zone", command=self._enter_draw_mode)
+        draw_btn.pack(side=tk.LEFT, padx=5)
+
+        edit_btn = ttk.Button(map_controls, text="🔧 Edit Zones", command=self._enter_edit_mode)
+        edit_btn.pack(side=tk.LEFT, padx=5)
+
+        # --- The Canvas and Scrollbars ---
+        self.map_canvas = tk.Canvas(self.map_view_frame, bg=self.style.lookup("TEntry", "fieldbackground"), highlightthickness=0)
+        self.map_canvas.bind("<Double-Button-1>", self._on_section_double_click) # <-- ADD THIS LINE
+        self.map_v_scroll = ttk.Scrollbar(self.map_view_frame, orient="vertical", command=self.map_canvas.yview)
+        self.map_canvas = tk.Canvas(self.map_view_frame, bg=self.style.lookup("TEntry", "fieldbackground"), highlightthickness=0)
+        self.map_v_scroll = ttk.Scrollbar(self.map_view_frame, orient="vertical", command=self.map_canvas.yview)
+        self.map_h_scroll = ttk.Scrollbar(self.map_view_frame, orient="horizontal", command=self.map_canvas.xview)
+        self.map_canvas.configure(yscrollcommand=self.map_v_scroll.set, xscrollcommand=self.map_h_scroll.set)
+
+        # Place widgets on the grid
+        self.map_canvas.grid(row=1, column=0, sticky="nsew")
+        self.map_v_scroll.grid(row=1, column=1, sticky="ns")
+        self.map_h_scroll.grid(row=2, column=0, sticky="ew")
+
+        # --- Load existing data ---
+        self.map_view_data = self.settings.get("map_view_data", {"image_path": None, "sections": []})
+        self.map_image = None
+
+        if self.map_view_data.get("image_path") and os.path.exists(self.map_view_data["image_path"]):
+            self._load_map_image(self.map_view_data["image_path"])
+        
+        self.root.after(100, self._draw_map_sections)
+        return self.map_view_frame
+
+    def _load_map_image(self, path):
+        """Loads and displays the background image on the canvas."""
+        try:
+            img = Image.open(path)
+            self.map_image = ImageTk.PhotoImage(img)
+            self.map_canvas.create_image(0, 0, anchor="nw", image=self.map_image)
+            self.map_canvas.config(scrollregion=self.map_canvas.bbox("all"))
+            self.log(f"Map image loaded from {path}")
+        except Exception as e:
+            self.log(f"Error loading map image: {e}")
+            messagebox.showerror("Error", f"Could not load map image from {path}.\n\n{e}", parent=self.root)
+
+    def _upload_map_image(self):
+        """Opens a file dialog to let the user select a new map image."""
+        path = filedialog.askopenfilename(title="Select Map Image", filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.gif")])
+        if not path: return
+        self.map_view_data["image_path"] = path
+        self.settings.set("map_view_data", self.map_view_data)
+        self._load_map_image(path)
+
+    def _enter_draw_mode(self):
+        """Prepares the canvas for drawing a new polygon zone."""
+        self.is_in_draw_mode = True
+        self.current_polygon_points = []
+        self.map_canvas.config(cursor="crosshair")
+        self.map_canvas.bind("<Button-1>", self._on_map_left_click)
+        self.map_canvas.bind("<Button-3>", self._on_map_right_click)
+        self.map_canvas.bind("<Motion>", self._on_map_mouse_move)
+        self.root.bind("<Escape>", self._cancel_draw)
+        self.notify("Draw Mode: Left-click to add points, Right-click to finish.", 4000)
+
+    def _exit_draw_mode(self):
+        """Cleans up after drawing is complete or cancelled."""
+        self.is_in_draw_mode = False
+        self.current_polygon_points = []
+        self.map_canvas.config(cursor="")
+        self.map_canvas.unbind("<Button-1>")
+        self.map_canvas.unbind("<Button-3>")
+        self.map_canvas.unbind("<Motion>")
+        self.root.unbind("<Escape>")
+        for item in self.temp_draw_items: self.map_canvas.delete(item)
+        self.temp_draw_items = []
+
+    def _cancel_draw(self, event=None):
+        if self.is_in_draw_mode:
+            self.log("Drawing cancelled by user.")
+            self._exit_draw_mode()
+
+    def _on_map_left_click(self, event):
+        x, y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
+        self.current_polygon_points.extend([x, y])
+        dot = self.map_canvas.create_oval(x-3, y-3, x+3, y+3, fill=self.style.lookup("Accent.TButton", "background"), outline="")
+        self.temp_draw_items.append(dot)
+        if len(self.current_polygon_points) > 2:
+            line = self.map_canvas.create_line(self.current_polygon_points, fill="white", width=2)
+            self.temp_draw_items.append(line)
+
+    def _on_map_mouse_move(self, event):
+        if not self.is_in_draw_mode or not self.current_polygon_points: return
+        if self.temp_draw_items and "rubber_band" in self.map_canvas.gettags(self.temp_draw_items[-1]):
+            self.map_canvas.delete(self.temp_draw_items.pop())
+        last_x, last_y = self.current_polygon_points[-2], self.current_polygon_points[-1]
+        cursor_x, cursor_y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
+        line = self.map_canvas.create_line(last_x, last_y, cursor_x, cursor_y, fill="white", dash=(4, 4), tags="rubber_band")
+        self.temp_draw_items.append(line)
+
+    def _on_map_right_click(self, event):
+        if len(self.current_polygon_points) < 6:
+            self.notify("A shape needs at least 3 points.", 3000)
+            return
+        coords = self.current_polygon_points
+        assigned_pins = {s['valve_pin'] for s in self.map_view_data['sections']}
+        available_valves = {f"{v['name']} (Pin {v['pin']})": i for i, v in enumerate(self.valves) if v['pin'] not in assigned_pins}
+        if not available_valves:
+            messagebox.showwarning("No Valves", "There are no available valves to assign.", parent=self.root)
+            self._exit_draw_mode()
+            return
+        dialog = AssignValveDialog(self.root, available_valves)
+        if dialog.result:
+            result, valve_index, new_name = dialog.result, dialog.result['valve_index'], dialog.result['name']
+            valve_to_rename = self.valves[valve_index]
+            self.log(f"Renaming valve '{valve_to_rename['name']}' to '{new_name}' via Map View.")
+            valve_to_rename['name'] = new_name
+            for plant, emoji in constants.PLANT_EMOJIS.items():
+                if plant in new_name.lower(): valve_to_rename["icon"] = emoji; break
+            new_section = {"coords": coords, "valve_pin": valve_to_rename['pin']}
+            self.map_view_data['sections'].append(new_section)
+            self.settings.set("map_view_data", self.map_view_data)
+            self.save_state()
+            self._draw_map_sections()
+            self.filter_valves()
+            self.notify(f"Zone '{new_name}' created and assigned to Pin {valve_to_rename['pin']}.")
+        self._exit_draw_mode()
+    
+    def _enter_edit_mode(self):
+        """Prepares the canvas for editing or deleting zones."""
+        self.is_in_edit_mode = True
+        self.map_canvas.config(cursor="hand2")
+        self.map_canvas.bind("<Button-1>", self._on_section_click)
+        self.root.bind("<Escape>", self._exit_edit_mode)
+        self.notify("Edit Mode: Click a zone to modify. Press ESC to exit.", 4000)
+
+    def _exit_edit_mode(self, event=None):
+        """Cleans up after editing is complete."""
+        self.is_in_edit_mode = False
+        self.map_canvas.config(cursor="")
+        self.map_canvas.unbind("<Button-1>")
+        self.root.unbind("<Escape>")
+        self.notify("Exited Edit Mode.", 2000)
+
+    def _on_section_click(self, event):
+        """Handles a click on a section when in edit mode."""
+        canvas_x, canvas_y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
+        
+        # Find the item (polygon) that was clicked on
+        clicked_items = self.map_canvas.find_closest(canvas_x, canvas_y)
+        if not clicked_items: return
+        
+        tags = self.map_canvas.gettags(clicked_items[0])
+        section_pin = None
+        for tag in tags:
+            if tag.startswith("section_pin_"):
+                section_pin = int(tag.split("_")[-1])
+                break
+        
+        if section_pin is None: return
+
+        # --- Create a pop-up menu for editing ---
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Rename Zone...", command=lambda: self._rename_section(section_pin))
+        menu.add_command(label="Delete Zone", command=lambda: self._delete_section(section_pin))
+        # We can add "Re-assign Valve" here in the future
+
+        # Display the menu at the cursor's position
+        menu.tk_popup(event.x_root, event.y_root)
+    
+    def _on_section_double_click(self, event, valve_pin):
+        """Toggles the valve for a specific pin, called directly by a shape's event binding."""
+        # This interaction should only work when not in Draw or Edit mode
+        if self.is_in_draw_mode or self.is_in_edit_mode:
+            return
+
+        # Find the index of the valve that has this pin
+        valve_index = -1
+        for i, valve in enumerate(self.valves):
+            if valve['pin'] == valve_pin:
+                valve_index = i
+                break
+        
+        # If we found the valve, toggle it
+        if valve_index != -1:
+            self.log(f"Toggling valve '{self.valves[valve_index]['name']}' via map double-click.")
+            self.toggle_valve(valve_index)
+
+    def _rename_section(self, valve_pin):
+        """Renames a zone and its associated valve."""
+        valve = self.find_item_by_pin(valve_pin)
+        if not valve: return
+
+        new_name = simpledialog.askstring("Rename Zone", f"Enter new name for '{valve['name']}':", parent=self.root)
+        if not new_name or not new_name.strip(): return
+
+        self.log(f"Renaming valve '{valve['name']}' to '{new_name}' via Map Edit.")
+        valve['name'] = new_name.strip()
+        self.save_state()
+        self._draw_map_sections() # Redraw with new name
+        self.filter_valves()     # Update the Card View
+        self.notify(f"Zone renamed to '{new_name}'.")
+
+    def _delete_section(self, valve_pin):
+        """Deletes a zone from the map."""
+        valve = self.find_item_by_pin(valve_pin)
+        if not valve: return
+        
+        if not messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete the zone '{valve['name']}' from the map?\n\n(The valve itself will not be deleted.)", parent=self.root):
+            return
+
+        # Find and remove the section from the settings data
+        sections = self.map_view_data.get('sections', [])
+        self.map_view_data['sections'] = [s for s in sections if s['valve_pin'] != valve_pin]
+        
+        self.settings.set("map_view_data", self.map_view_data)
+        self.log(f"Map zone for Pin {valve_pin} ('{valve['name']}') deleted.")
+        self._draw_map_sections() # Redraw the map without the deleted section
+        self.notify(f"Zone '{valve['name']}' deleted.")
+
+
+    def _draw_map_sections(self):
+        """Clears and redraws all saved polygons and binds double-click events directly to them."""
+        self.map_canvas.delete("map_section") 
+
+        for section in self.map_view_data.get('sections', []):
+            valve_pin = section['valve_pin']
+            valve = self.find_item_by_pin(valve_pin)
+            if not valve or not section.get('coords'): continue
+
+            coords = section['coords']
+            fill_color = "#81C784" if valve.get('status') else "#546E7A"
+            unique_tag = f"section_pin_{valve_pin}"
+            
+            # Draw the polygon and text with the unique tag
+            self.map_canvas.create_polygon(
+                coords, outline=fill_color, fill=fill_color, stipple="gray50",
+                width=2, tags=("map_section", unique_tag)
+            )
+            
+            avg_x = sum(coords[i] for i in range(0, len(coords), 2)) / (len(coords) / 2)
+            avg_y = sum(coords[i] for i in range(1, len(coords), 2)) / (len(coords) / 2)
+            
+            self.map_canvas.create_text(
+                avg_x, avg_y, text=valve['name'], fill="white",
+                font=('Segoe UI', 10, 'bold'), tags=("map_section", unique_tag)
+            )
+
+            # --- THIS IS THE NEW, DIRECT BINDING ---
+            # This binds the event to all items with this unique tag (the polygon and its text).
+            # The lambda function ensures the correct valve_pin is passed when the event fires.
+            self.map_canvas.tag_bind(
+                unique_tag, 
+                "<Double-Button-1>", 
+                lambda event, pin=valve_pin: self._on_section_double_click(event, pin)
+            )
 
     def find_item_by_pin(self, pin):
         for item in self.valves + self.aux_controls:
