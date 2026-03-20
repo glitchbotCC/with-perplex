@@ -22,8 +22,30 @@ class AutomationWindow(tk.Toplevel):
         self.duration_var = tk.StringVar(value="10")
 
         self.configure(bg=self.master_app.style.lookup(".", "background"))
+        self._configure_styles()
         self._setup_ui()
         self._populate_rules_treeview()
+
+    def _configure_styles(self):
+        style = ttk.Style(self)
+        style.configure("Automation.TEntry",
+                        fieldbackground="#FFFDE7",
+                        foreground="#000000",
+                        bordercolor="#FFEB3B",
+                        relief="solid")
+        style.map("Automation.TEntry",
+                  fieldbackground=[('focus', '#FFF59D'), ('!focus', '#FFFDE7')],
+                  foreground=[('focus', '#000000'), ('!focus', '#000000')],
+                  insertcolor=[('focus', '#000000')])
+
+        style.configure("Automation.TCombobox",
+                        fieldbackground="#FFFDE7",
+                        foreground="#000000",
+                        background="#FFFFFF",
+                        bordercolor="#FFEB3B")
+        style.map("Automation.TCombobox",
+                  fieldbackground=[('readonly', '#FFF59D'), ('!readonly', '#FFFDE7')],
+                  foreground=[('readonly', '#000000'), ('!readonly', '#000000')])
 
     @staticmethod
     def format_rule_for_display(rule):
@@ -59,7 +81,8 @@ class AutomationWindow(tk.Toplevel):
 
         ttk.Label(if_frame, text="Sensor:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
         self.sensor_cb = ttk.Combobox(if_frame, textvariable=self.sensor_var, state="readonly",
-                                      values=["Soil Moisture", "Temp (DHT22)", "Humidity (DHT22)", "Temp (DHT11)", "Humidity (DHT11)"])
+                                      values=["Soil Moisture", "Temp (DHT22)", "Humidity (DHT22)", "Temp (DHT11)", "Humidity (DHT11)"],
+                                      style="Automation.TCombobox")
         self.sensor_cb.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
         self.sensor_cb.bind("<<ComboboxSelected>>", self._update_condition_ui)
         self.sensor_cb.current(0)
@@ -75,20 +98,20 @@ class AutomationWindow(tk.Toplevel):
         ttk.Label(then_frame, text="THEN (Action)", font=('Segoe UI', 12, 'bold')).grid(row=0, column=0, columnspan=2, sticky='w', padx=5, pady=5)
 
         ttk.Label(then_frame, text="Action:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-        self.action_cb = ttk.Combobox(then_frame, textvariable=self.action_var, state="readonly", values=["Turn ON", "Turn OFF"])
+        self.action_cb = ttk.Combobox(then_frame, textvariable=self.action_var, state="readonly", values=["Turn ON", "Turn OFF"], style="Automation.TCombobox")
         self.action_cb.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
         self.action_cb.bind("<<ComboboxSelected>>", self._toggle_duration_entry)
         self.action_cb.current(0)
 
         ttk.Label(then_frame, text="Target:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
-        self.target_cb = ttk.Combobox(then_frame, textvariable=self.target_var, state="readonly")
+        self.target_cb = ttk.Combobox(then_frame, textvariable=self.target_var, state="readonly", style="Automation.TCombobox")
         self.target_cb.grid(row=2, column=1, padx=5, pady=5, sticky='ew')
         self._populate_target_devices()
 
         self.duration_frame = ttk.Frame(then_frame, style="Card.TFrame")
         self.duration_frame.grid(row=3, column=1, padx=5, pady=5, sticky='w')
         ttk.Label(self.duration_frame, text="for").pack(side=tk.LEFT)
-        self.duration_entry = ttk.Entry(self.duration_frame, textvariable=self.duration_var, width=5)
+        self.duration_entry = ttk.Entry(self.duration_frame, textvariable=self.duration_var, width=5, style="Automation.TEntry")
         self.duration_entry.pack(side=tk.LEFT, padx=3)
         ttk.Label(self.duration_frame, text="minutes").pack(side=tk.LEFT)
 
@@ -130,15 +153,15 @@ class AutomationWindow(tk.Toplevel):
 
         if sensor == "Soil Moisture":
             self.condition_var.set("is")
-            value_cb = ttk.Combobox(self.condition_frame, textvariable=self.value_var, state="readonly", values=["Wet", "Dry"])
+            value_cb = ttk.Combobox(self.condition_frame, textvariable=self.value_var, state="readonly", values=["Wet", "Dry"], style="Automation.TCombobox")
             value_cb.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
             value_cb.set("Dry")
         else:
-            condition_cb = ttk.Combobox(self.condition_frame, textvariable=self.condition_var, state="readonly", values=[">", "<", "=="], width=4)
+            condition_cb = ttk.Combobox(self.condition_frame, textvariable=self.condition_var, state="readonly", values=[">", "<", "=="], width=4, style="Automation.TCombobox")
             condition_cb.grid(row=0, column=1, padx=5, pady=5, sticky='w')
             condition_cb.set(">")
 
-            value_entry = ttk.Entry(self.condition_frame, textvariable=self.value_var, width=8)
+            value_entry = ttk.Entry(self.condition_frame, textvariable=self.value_var, width=8, style="Automation.TEntry")
             value_entry.grid(row=0, column=2, padx=5, pady=5, sticky='w')
 
             unit = "°C" if "Temp" in sensor else "%"

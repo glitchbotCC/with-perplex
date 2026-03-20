@@ -1,5 +1,6 @@
 # smart_farm/settings_manager.py
 
+import copy
 import json
 import os
 from . import utils
@@ -16,7 +17,7 @@ class PersistentSettings:
         """ Returns a dictionary containing all default application settings. """
         return {
             "theme": "dark",
-            "location": "London,UK",
+            "location": "INDIA",
             "valves": [],
             "aux_controls": [],
             "automation_rules": [],
@@ -61,19 +62,31 @@ class PersistentSettings:
     def save(self):
         """ Saves the current settings dictionary (self.data) to the JSON file. """
         try:
+            def safe_default(o):
+                # Preserve basic Tkinter variable values if accidentally stored.
+                if hasattr(o, 'get'):
+                    try:
+                        return o.get()
+                    except Exception:
+                        return str(o)
+                return str(o)
+
             with open(self.filename, "w", encoding='utf-8') as f:
-                json.dump(self.data, f, indent=4)
+                json.dump(self.data, f, indent=4, default=safe_default)
         except Exception as e:
             print(f"Error saving settings to {self.filename}: {e}")
 
     def get(self, key, default_override=None):
         """
         Retrieves a setting value by its key.
+        Returns deep copies for mutable values to avoid accidental in-place modification
+        of internal data storage (which can lead to non-serializable objects being added).
         """
         default_value_from_schema = self._get_default_settings().get(key)
-        if default_override is not None:
-            return self.data.get(key, default_override)
-        return self.data.get(key, default_value_from_schema)
+        val = self.data.get(key, default_value_from_schema) if default_override is None else self.data.get(key, default_override)
+        if isinstance(val, (dict, list)):
+            return copy.deepcopy(val)
+        return val
 
     def set(self, key, value):
         """ Sets a setting value for a given key and immediately saves all settings. """

@@ -13,6 +13,7 @@ import re
 import random
 import requests
 import hashlib
+import math
 from queue import Queue
 
 
@@ -28,64 +29,14 @@ from .scheduler_window import SchedulerWindow
 from .automation_window import AutomationWindow
 from .log_window import LogWindow
 from .auth_dialog import AuthDialog
+from .valve_manager import ValveManagerMixin
+from .scheduler_manager import SchedulerManagerMixin
+from .automation_manager import AutomationManagerMixin
+from .map_manager import MapManagerMixin, AssignValveDialog
 
 
 
-class AssignValveDialog(tk.Toplevel):
-    """A custom dialog to name a new map section and assign a valve."""
-    def __init__(self, master, available_valves):
-        super().__init__(master)
-        self.transient(master)
-        self.title("Assign Valve to Section")
-        self.result = None
-        
-        main_frame = ttk.Frame(self, padding=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # --- Name Entry ---
-        ttk.Label(main_frame, text="Zone Name:").pack(anchor="w")
-        self.name_var = tk.StringVar()
-        self.name_entry = ttk.Entry(main_frame, textvariable=self.name_var, width=40)
-        self.name_entry.pack(fill="x", pady=(0, 15))
-        self.name_entry.focus_set()
-
-        # --- Valve Selection ---
-        ttk.Label(main_frame, text="Assign Valve:").pack(anchor="w")
-        self.valve_var = tk.StringVar()
-        self.valve_combo = ttk.Combobox(main_frame, textvariable=self.valve_var, 
-                                        values=list(available_valves.keys()), state="readonly")
-        if available_valves:
-            self.valve_combo.current(0)
-        self.valve_combo.pack(fill="x", pady=(0, 20))
-        self.available_valves = available_valves
-
-        # --- Buttons ---
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill="x")
-        ok_button = ttk.Button(button_frame, text="Assign", command=self._on_ok, style="Accent.TButton")
-        ok_button.pack(side="right")
-        cancel_button = ttk.Button(button_frame, text="Cancel", command=self._on_cancel)
-        cancel_button.pack(side="right", padx=(0, 5))
-
-        self.wait_window(self)
-
-    def _on_ok(self):
-        zone_name = self.name_var.get().strip()
-        selected_valve_display = self.valve_var.get()
-        if not zone_name or not selected_valve_display:
-            messagebox.showerror("Error", "Both a name and a valve must be selected.", parent=self)
-            return
-        
-        valve_index = self.available_valves[selected_valve_display]
-        self.result = {"name": zone_name, "valve_index": valve_index}
-        self.destroy()
-
-    def _on_cancel(self):
-        self.result = None
-        self.destroy()
-
-
-class MainWindow:
+class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixin, MapManagerMixin):
     """Main application class for Smart Farm Valve Control."""
     def __init__(self, root):
         self.log_window = None
@@ -106,10 +57,11 @@ class MainWindow:
         self.admin_pass_hash = self.settings.get("admin_pass_hash")
 
         # This section now safely loads data from your settings file
-        self.valves = self.settings.get("valves", [])
-        self.aux_controls = self.settings.get("aux_controls", [])
-        self.automation_rules = self.settings.get("automation_rules", [])
-        self.schedule_history = self.settings.get("schedule_history", [])
+        # Copy lists so the runtime state does not share references directly with persistent data
+        self.valves = [v.copy() for v in self.settings.get("valves", [])]
+        self.aux_controls = [a.copy() for a in self.settings.get("aux_controls", [])]
+        self.automation_rules = [r.copy() for r in self.settings.get("automation_rules", [])]
+        self.schedule_history = [s.copy() for s in self.settings.get("schedule_history", [])]
 
         self._migrate_schedule_data()
 
@@ -131,6 +83,9 @@ class MainWindow:
         else:
             if loaded_aux is not None: self.log("Invalid 'aux_controls' in settings, resetting to defaults.")
             self.aux_controls = default_aux_controls
+
+        self.layout_mode = self.settings.get("layout_mode", "comfortable")  # new: comfortable / compact
+        self.side_panel_visible = self.settings.get("side_panel_visible", True)
 
         self.undo_stack = []
         self.style = ttk.Style()
@@ -211,7 +166,7 @@ class MainWindow:
         if command == "toggle_valve":
             if "index" in data and 0 <= data["index"] < len(self.valves):
                 self.toggle_valve(data["index"])
-        
+
         elif command == "toggle_aux":
             if "index" in data and 0 <= data["index"] < len(self.aux_controls):
                 self.toggle_aux_control(data["index"])
@@ -226,56 +181,56 @@ class MainWindow:
 
         elif command == "remove_valve":
             if not self.is_config_locked.get() and "index" in data:
-                self.clear_all_schedules_for_item("valve", data["index"])
-                valve = self.valves[data["index"]]
-                self.hardware.set_pin_state(valve['pin'], False)
-                rem_copy = self.valves.pop(data["index"])
-                self.undo_stack.append(rem_copy.copy())
-                self.log(f"Valve '{rem_copy['name']}' removed via web UI.")
-                self.save_state()
-                self.filter_valves()
-                self.update_dashboard()
-        
+                idx = data["index"]
+                if 0 <= idx < len(self.valves):
+                    self.clear_all_schedules_for_item("valve", idx)
+                    valve = self.valves[idx]
+                    self.hardware.set_pin_state(valve['pin'], False)
+                    rem_copy = self.valves.pop(idx)
+                    self.undo_stack.append(rem_copy.copy())
+                    self.log(f"Valve '{rem_copy['name']}' removed via web UI.")
+                    self.save_state()
+                    self.filter_valves()
+                    self.update_dashboard()
+
         elif command == "rename_item":
             if not self.is_config_locked.get() and "type" in data and "index" in data and "newName" in data:
                 item_list = self.valves if data['type'] == 'valve' else self.aux_controls
-                item = item_list[data['index']]
-                item['name'] = data['newName']
-                self.save_state()
-                if data['type'] == 'valve': self.filter_valves()
-                else: self.update_aux_controls_ui()
+                idx = data['index']
+                if 0 <= idx < len(item_list):
+                    item_list[idx]['name'] = data['newName']
+                    self.save_state()
+                    if data['type'] == 'valve':
+                        self.filter_valves()
+                    else:
+                        self.update_aux_controls_ui()
 
         elif command == "edit_note":
-             if "index" in data and "newNote" in data:
+            if "index" in data and "newNote" in data and 0 <= data['index'] < len(self.valves):
                 self.valves[data['index']]['note'] = data['newNote']
                 self.save_state()
                 self.filter_valves()
-        
+
         elif command == "toggle_valve_lock":
-            if "index" in data:
+            if "index" in data and 0 <= data['index'] < len(self.valves):
                 self.toggle_lock(data['index'])
 
         elif command == "emergency_stop":
             self.turn_all_systems_off(from_web=True)
-            
+
         elif command == "set_schedule":
             if "item_type" in data and "item_idx" in data and "details" in data:
                 self.log(f"Received web command to set schedule for {data['item_type']} at index {data['item_idx']}")
-                self.set_schedule_for_item(
-                    item_type=data['item_type'],
-                    item_idx=data['item_idx'],
-                    schedule_id=None, # Web UI doesn't support editing yet
-                    details=data['details']
-                )
-        
+                self.set_schedule_for_item(item_type=data['item_type'], item_idx=data['item_idx'], schedule_id=None, details=data['details'])
+
         elif command == "remove_schedule":
             if "id" in data and data["id"]:
                 self.log(f"Received web command to remove schedule ID: {data['id']}")
                 self.clear_schedule_by_id(data['id'])
-        
+
         elif command == "add_automation_rule":
             if isinstance(data, dict):
-                self.log(f"Received web command to add automation rule.")
+                self.log("Received web command to add automation rule.")
                 self.automation_rules.append(data)
                 self.save_state()
 
@@ -290,7 +245,7 @@ class MainWindow:
                     self.log(f"Invalid index for remove_automation_rule: {index}")
 
         elif command == "toggle_lock":
-            if self.is_config_locked.get(): # Trying to unlock
+            if self.is_config_locked.get():
                 password = data.get("password")
                 if password and self._hash_password(password) == self.admin_pass_hash:
                     self.is_config_locked.set(False)
@@ -298,58 +253,13 @@ class MainWindow:
                     self.log("Configuration Unlocked via web UI.")
                 else:
                     self.log("Failed web UI unlock attempt.")
-            else: # Trying to lock
+            else:
                 if data.get("is_setting_credentials"):
-                    self.admin_user = data["username"]
-                    self.admin_pass_hash = self._hash_password(data["password"])
+                    self.admin_user = data.get("username")
+                    self.admin_pass_hash = self._hash_password(data.get("password", ""))
                     self.settings.set("admin_user", self.admin_user)
                     self.settings.set("admin_pass_hash", self.admin_pass_hash)
                     self.log("Admin credentials set via web UI.")
-                
-                self.is_config_locked.set(True)
-                self.settings.set("config_locked", True)
-                self.log("Configuration Locked via web UI.")
-            self.update_lock_status_ui()
-        
-        elif command == "rename_item":
-            if not self.is_config_locked.get() and "type" in data and "index" in data and "newName" in data:
-                item_list = self.valves if data['type'] == 'valve' else self.aux_controls
-                item = item_list[data['index']]
-                item['name'] = data['newName']
-                self.save_state()
-                if data['type'] == 'valve': self.filter_valves()
-                else: self.update_aux_controls_ui()
-
-        elif command == "edit_note":
-             if "index" in data and "newNote" in data:
-                self.valves[data['index']]['note'] = data['newNote']
-                self.save_state()
-                self.filter_valves()
-        
-        elif command == "toggle_valve_lock":
-            if "index" in data:
-                self.toggle_lock(data['index'])
-
-        elif command == "emergency_stop":
-            self.turn_all_systems_off(from_web=True)
-            
-        elif command == "toggle_lock":
-            if self.is_config_locked.get(): # Trying to unlock
-                password = data.get("password")
-                if password and self._hash_password(password) == self.admin_pass_hash:
-                    self.is_config_locked.set(False)
-                    self.settings.set("config_locked", False)
-                    self.log("Configuration Unlocked via web UI.")
-                else:
-                    self.log("Failed web UI unlock attempt.")
-            else: # Trying to lock
-                if data.get("is_setting_credentials"):
-                    self.admin_user = data["username"]
-                    self.admin_pass_hash = self._hash_password(data["password"])
-                    self.settings.set("admin_user", self.admin_user)
-                    self.settings.set("admin_pass_hash", self.admin_pass_hash)
-                    self.log("Admin credentials set via web UI.")
-                
                 self.is_config_locked.set(True)
                 self.settings.set("config_locked", True)
                 self.log("Configuration Locked via web UI.")
@@ -390,32 +300,6 @@ class MainWindow:
             "system_time": self.system_time_var.get(),
             "theme": self.theme
         }
-
-    def _hash_password(self, password):
-        return hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-    def save_state(self):
-        """Saves the current application state and tells the MQTT manager to publish it."""
-        valves_to_save = [v.copy() for v in self.valves]
-        for v in valves_to_save:
-            v.pop("timer_var", None)
-            
-        self.settings.set("valves", valves_to_save)
-        self.settings.set("aux_controls", self.aux_controls)
-        self.settings.set("automation_rules", self.automation_rules)
-        self.settings.set("schedule_history", self.schedule_history)
-        self.settings.set("logs", self.logs)
-        
-        if self.mqtt_manager:
-            self.mqtt_manager.publish_state()
-
-    def on_close(self):
-        self.log("Application closing.")
-        self.hardware.cleanup()
-        if self.mqtt_manager:
-            self.mqtt_manager.disconnect()
-        self.root.destroy()
-
 
     def toggle_configuration_lock(self):
         """Handles the logic for locking or unlocking the configuration."""
@@ -589,33 +473,56 @@ class MainWindow:
         self.root.bind("<Control-z>", lambda _: self.undo_remove())
 
     def toggle_theme(self):
+        selected_tab = None
+        if hasattr(self, 'notebook') and self.notebook.index("end") > 0:
+            try:
+                selected_tab = self.notebook.index(self.notebook.select())
+            except Exception:
+                selected_tab = None
+
         self.theme = "dark" if self.theme == "light" else "light"
         self.settings.set("theme", self.theme)
         self.apply_theme()
         self.setup_ui()
+
+        if selected_tab is not None and hasattr(self, 'notebook'):
+            try:
+                if selected_tab < self.notebook.index("end"):
+                    self.notebook.select(selected_tab)
+            except Exception:
+                pass
+
         self.filter_valves() 
         self.update_aux_controls_ui()
         self.update_dashboard()
         self.update_lock_status_ui()
 
+    def toggle_layout_mode(self):
+        self.layout_mode = "compact" if self.layout_mode == "comfortable" else "comfortable"
+        self.settings.set("layout_mode", self.layout_mode)
+        if hasattr(self, 'layout_toggle_btn'):
+            self.layout_toggle_btn.config(text="Compact View" if self.layout_mode == "comfortable" else "Comfort View")
+        self.render_valves_grid()
+
     def apply_theme(self):
         self.style.theme_use("clam")
 
-        slate_bg = "#263238"
-        slate_card_bg = "#37474F"
-        slate_text = "#CFD8DC"
-        slate_border = "#546E7A"
-        slate_accent_green = "#81C784"
-        slate_accent_fg = "#263238"
-        slate_error_red = "#E57373"
+        # Friendly ambient palette: soft, approachable, high readability
+        slate_bg = "#1F2A38"            # dark background
+        slate_card_bg = "#2B3C52"       # dark card container
+        slate_text = "#DCE7F2"          # light text on dark
+        slate_border = "#4A5F7E"        # subtle border
+        slate_accent_green = "#4CABDB"   # friendly blue accent
+        slate_accent_fg = "#FFFFFF"      # accent text for dark
+        slate_error_red = "#F0575D"     # softer danger
 
-        slate_light_bg = "#ECEFF1"
-        slate_light_card_bg = "#FFFFFF"
-        slate_light_text = "#263238"
-        slate_light_border = "#B0BEC5"
-        slate_light_accent_green = "#4CAF50"
-        slate_light_accent_fg = "#FFFFFF"
-        slate_light_error_red = "#D32F2F"
+        slate_light_bg = "#F1F4F8"      # light background
+        slate_light_card_bg = "#FFFFFF"  # light cards
+        slate_light_text = "#2D3E50"    # dark text on light
+        slate_light_border = "#CCE0F2"  # light border
+        slate_light_accent_green = "#5C96D5" # calm accent
+        slate_light_accent_fg = "#FFFFFF"   # accent text
+        slate_light_error_red = "#DD5B64"  # soften red
 
         if self.theme == "dark":
             bg, fg, frame_bg, border = slate_bg, slate_text, slate_card_bg, slate_border
@@ -640,33 +547,65 @@ class MainWindow:
         self.style.configure("Header.TLabel", font=("Segoe UI Semibold", 26), background=bg, foreground=fg)
         self.style.configure("Subheader.TLabel", font=("Segoe UI", 13), background=bg, foreground=fg)
         
-        self.style.configure("TButton", background=btn_bg, foreground=btn_fg, borderwidth=1, relief="solid", font=('Segoe UI', 10, 'bold'), padding=(10, 6))
-        self.style.map("TButton", bordercolor=[('active', accent)], background=[('active', btn_active_bg)])
-        
-        self.style.configure("Accent.TButton", background=accent, foreground=accent_fg, borderwidth=1, bordercolor=accent)
-        self.style.map("Accent.TButton", background=[('active', accent)])
-        
-        self.style.configure("Emergency.TButton", background=emergency, foreground=emergency_fg, borderwidth=1, bordercolor=emergency)
-        self.style.map("Emergency.TButton", background=[('active', emergency)])
+        self.style.configure("TButton", background=btn_bg, foreground=btn_fg, borderwidth=0, relief="flat", font=('Segoe UI', 10, 'bold'), padding=(10, 7))
+        self.style.map("TButton", background=[('active', btn_active_bg), ('pressed', btn_active_bg)])
 
-        self.style.configure("Card.TFrame", background=frame_bg, borderwidth=1, relief="solid", bordercolor=border)
+        self.style.configure("Accent.TButton", background=accent, foreground=accent_fg, borderwidth=0, relief="flat", font=('Segoe UI', 10, 'bold'), padding=(10, 7))
+        self.style.map("Accent.TButton", background=[('active', accent), ('pressed', accent)])
+
+        self.style.configure("Emergency.TButton", background=emergency, foreground=emergency_fg, borderwidth=0, relief="flat", font=('Segoe UI', 10, 'bold'), padding=(10, 7))
+        self.style.map("Emergency.TButton", background=[('active', emergency), ('pressed', emergency)])
+
+        # apply softer button aesthetics for friendly UI
+        self.style.configure("Modern.TButton", background="#5C96D5", foreground="#FFFFFF", borderwidth=0, relief="flat", padding=(8, 6), font=('Segoe UI', 10, 'bold'))
+        self.style.map("Modern.TButton", background=[('active', '#4A84B9'), ('pressed', '#3E6C97')])
+
+        self.style.configure("Valve.Toggle.TButton", background="#5C96D5", foreground="#FFFFFF", borderwidth=1, relief="solid", padding=(8, 6), font=('Segoe UI', 10, 'bold'))
+        self.style.map("Valve.Toggle.TButton", 
+                       background=[('active', '#4A84B9'), ('pressed', '#3E6C97')],
+                       bordercolor=[('active', '#6AA9D8'), ('!active', '#5C96D5')])
+
+        # Note: ttk doesn't support real rounded corners in many themes; we simulate softer edges
+        self.style.configure("Card.TFrame", background=frame_bg, borderwidth=0, relief="flat", bordercolor=border, padding=12)
+        self.style.map("Card.TFrame", background=[('active', frame_bg)])
         self.style.configure("Card.TFrame.Label", background=frame_bg, foreground=fg, font=('Segoe UI Semibold', 11))
-        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg, insertcolor=entry_insert, borderwidth=1, relief="solid", bordercolor=border)
-        self.style.map("TEntry", bordercolor=[('focus', accent)])
-        
+
+        self.style.configure("Rounded.TFrame", background=frame_bg, borderwidth=0, relief="flat", padding=12)
+
+        # Modern mode styling
+        self.style.configure("Modern.TFrame", background=frame_bg)
+        self.style.configure("Modern.TLabel", background=frame_bg, foreground=fg, font=('Segoe UI', 11))
+        self.style.configure("Modern.Header.TLabel", font=('Segoe UI Semibold', 28), background=frame_bg, foreground=fg)
+        self.style.configure("Modern.Subheader.TLabel", font=('Segoe UI', 13), background=frame_bg, foreground=fg)
+
+        self.style.configure("Modern.TButton", background="#388E3C", foreground="#FFFFFF", borderwidth=0, padding=(10, 8), font=('Segoe UI', 10, 'bold'))
+        self.style.map("Modern.TButton", background=[('active', '#2E7D32'), ('pressed', '#1B5E20')])
+
+        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg, insertcolor=entry_insert, borderwidth=0, relief="flat", font=('Segoe UI', 10), padding=6)
+        self.style.map("TEntry", fieldbackground=[('focus', '#ffffff')], foreground=[('focus', '#000000')])
+
+        self.style.configure("TCombobox", fieldbackground=entry_bg, background=entry_bg, foreground=entry_fg, borderwidth=0, relief="flat", padding=6)
+        self.style.map("TCombobox", fieldbackground=[('readonly', '#ffffff'), ('!readonly', entry_bg)])
+
         self.style.configure("TScrollbar", troughcolor=bg, background=frame_bg, arrowcolor=fg, borderwidth=0, relief="flat")
         self.style.configure("TRadiobutton", background=frame_bg, foreground=fg, font=('Segoe UI', 10))
         self.style.map("TRadiobutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', frame_bg)])
         self.style.configure("TCheckbutton", background=frame_bg, foreground=fg)
         self.style.map("TCheckbutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', frame_bg)])
         
-        self.style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg, font=('Segoe UI', 10), rowheight=28, borderwidth=0)
+        self.style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg, font=('Segoe UI', 10), rowheight=28, borderwidth=0, relief='flat')
         self.style.map("Treeview", background=[('selected', tree_sel_bg)], foreground=[('selected', accent_fg if self.theme == 'dark' else fg)])
-        self.style.configure("Treeview.Heading", background=bg, foreground=fg, relief="flat", font=('Segoe UI', 10, 'bold'), padding=5)
+        self.style.configure("Treeview.Heading", background=bg, foreground=fg, relief="flat", borderwidth=0, padding=5)
 
         self.style.configure("TCombobox", fieldbackground=entry_bg, background=btn_bg, foreground=entry_fg, arrowcolor=fg, insertcolor=entry_insert, bordercolor=border)
         self.style.map('TCombobox', selectbackground=[('readonly', tree_sel_bg)], selectforeground=[('readonly', fg)])
-        
+
+        self.style.configure("TNotebook", background=bg, borderwidth=0, relief='flat')
+        self.style.configure("TNotebook.Tab", background=frame_bg, foreground=fg, borderwidth=0, relief='flat', padding=(12, 8), font=('Segoe UI', 10, 'bold'))
+        self.style.map("TNotebook.Tab",
+                       background=[('selected', accent), ('!selected', frame_bg)],
+                       foreground=[('selected', accent_fg), ('!selected', fg)])
+
         self.style.configure("Valve.Card.TFrame", background=frame_bg, borderwidth=1, relief="solid")
         self.style.map("Valve.Card.TFrame", bordercolor=[('!focus', accent), ('active', accent)])
         self.style.configure("Locked.Valve.Card.TFrame", background=locked_bg, bordercolor=emergency)
@@ -681,16 +620,16 @@ class MainWindow:
 
         self.setup_menu()
 
-        top_frame = ttk.Frame(self.root, style="TFrame", padding=(30, 15, 30, 10))
+        top_frame = ttk.Frame(self.root, style="Modern.TFrame", padding=(30, 15, 30, 10))
         top_frame.pack(fill=tk.X, side=tk.TOP)
 
-        header = ttk.Frame(top_frame, style="TFrame")
+        header = ttk.Frame(top_frame, style="Modern.TFrame")
         header.pack(fill=tk.X, pady=(5, 2))
-        ttk.Label(header, text="👨‍🌾", font=("Segoe UI Emoji", 36), style="TLabel").pack(side=tk.LEFT, padx=(0, 15), pady=10)
-        title_frame = ttk.Frame(header, style="TFrame")
+        ttk.Label(header, text="👨‍🌾", font=("Segoe UI Emoji", 36), style="Modern.Header.TLabel").pack(side=tk.LEFT, padx=(0, 15), pady=10)
+        title_frame = ttk.Frame(header, style="Modern.TFrame")
         title_frame.pack(side=tk.LEFT, pady=10, anchor="w")
-        ttk.Label(title_frame, text=constants.APP_NAME, style="Header.TLabel").pack(anchor="w")
-        ttk.Label(title_frame, text="Automate and Monitor Your Irrigation System", style="Subheader.TLabel").pack(anchor="w")
+        ttk.Label(title_frame, text=constants.APP_NAME, style="Modern.Header.TLabel").pack(anchor="w")
+        ttk.Label(title_frame, text="Automate and Monitor Your Irrigation System", style="Modern.Subheader.TLabel").pack(anchor="w")
 
         dash = ttk.Frame(top_frame, style="TFrame")
         dash.pack(fill=tk.X, pady=(15, 10))
@@ -732,17 +671,27 @@ class MainWindow:
         btn_group_frame = ttk.Frame(top_controls_card)
         btn_group_frame.pack(pady=(8, 8), padx=8, fill=tk.X, expand=True)
         
-        self.scheduler_btn = ttk.Button(btn_group_frame, text="Scheduler 📅", command=self.open_scheduler_window, style="TButton")
+        self.scheduler_btn = ttk.Button(btn_group_frame, text="Scheduler 📅", command=self.open_scheduler_window, style="Modern.TButton")
         self.scheduler_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
         utils.tooltip(self.scheduler_btn, "Ctrl+Alt+S")
 
-        self.reset_valves_btn = ttk.Button(btn_group_frame, text="Reset All ♻️", command=self.reset_valves, style="TButton")
+        self.reset_valves_btn = ttk.Button(btn_group_frame, text="Reset All ♻️", command=self.reset_valves, style="Modern.TButton")
         self.reset_valves_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
         utils.tooltip(self.reset_valves_btn, "Ctrl+R")
         
+        self.layout_toggle_btn = ttk.Button(btn_group_frame, text="Compact View" if self.layout_mode == "comfortable" else "Comfort View", command=self.toggle_layout_mode, style="Modern.TButton")
+        self.layout_toggle_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        utils.tooltip(self.layout_toggle_btn, "Toggle layout mode")
+
         self.emergency_off_btn = ttk.Button(btn_group_frame, text="🚨 Turn All Systems OFF", command=self.turn_all_systems_off, style="Emergency.TButton")
         self.emergency_off_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
         utils.tooltip(self.emergency_off_btn, "Immediately turns OFF all valves and aux controls.")
+
+        # Modern style sticky controls
+        self.add_valves_btn.config(style="Modern.TButton")
+        self.valve_entry.configure(style="TEntry")
+        self.search_entry.configure(style="TEntry")
+
 
         # Create a PanedWindow to hold the main content and the right-side panel
         self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL, style="TPanedwindow")
@@ -775,7 +724,10 @@ class MainWindow:
 
         # --- Tab 2: Map View ---
         # Call the setup method we created, which returns the map frame
-        map_view_frame = self._setup_map_view()
+        if hasattr(self, 'map_view_frame') and self.map_view_frame and self.map_view_frame.winfo_exists():
+            map_view_frame = self.map_view_frame
+        else:
+            map_view_frame = self._setup_map_view()
         self.notebook.add(map_view_frame, text=" 🗺️ Map View ")
 
         right_column_frame = ttk.Frame(self.main_pane, style="TFrame")
@@ -959,6 +911,18 @@ class MainWindow:
         for widget in self.valve_card_frame.winfo_children():
             widget.destroy()
 
+        # layout style switching
+        if self.layout_mode == "compact":
+            card_padding = 8
+            font_base = ('Segoe UI', 10)
+            label_font = ('Segoe UI', 9)
+            info_font = ('Segoe UI', 8)
+        else:
+            card_padding = 12
+            font_base = ('Segoe UI', 12)
+            label_font = ('Segoe UI', 10)
+            info_font = ('Segoe UI', 9)
+
         if not self.filtered_valves:
             no_valves_frame = ttk.Frame(self.valve_card_frame, style="TFrame")
             no_valves_frame.pack(padx=20, pady=40)
@@ -977,7 +941,7 @@ class MainWindow:
 
                 row, col = divmod(idx, num_columns)
                 card_style = "Locked.Valve.Card.TFrame" if valve_data.get("locked") else "Valve.Card.TFrame"
-                card = ttk.Frame(self.valve_card_frame, style=card_style, padding=12)
+                card = ttk.Frame(self.valve_card_frame, style=card_style, padding=card_padding)
                 card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
                 self.valve_card_frame.columnconfigure(col, weight=1)
 
@@ -988,26 +952,26 @@ class MainWindow:
 
                 header_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
                 header_frame.pack(fill=tk.X, pady=(0, 8))
-                status_lbl = ttk.Label(header_frame, text=status_txt, style="TLabel", foreground=status_color, font=("Segoe UI Emoji", 16))
+                status_lbl = ttk.Label(header_frame, text=status_txt, style="TLabel", foreground=status_color, font=("Segoe UI Emoji", 16 if self.layout_mode == "comfortable" else 14))
                 status_lbl.pack(side=tk.LEFT, padx=(0, 8))
                 utils.tooltip(status_lbl, f"Valve ON" if is_on else f"Valve OFF { '(Locked)' if valve_data.get('locked') else ''}")
                 self.valve_status_labels.append(status_lbl)
-                ttk.Label(header_frame, text=f"{icon} {valve_data['name']}", font=('Segoe UI', 12, 'bold')).pack(side=tk.LEFT, anchor="w")
+                ttk.Label(header_frame, text=f"{icon} {valve_data['name']}", font=(font_base[0], font_base[1] + 2, 'bold')).pack(side=tk.LEFT, anchor="w")
 
-                ttk.Button(card, text="Toggle Status", command=lambda i=orig_idx: self.toggle_valve(i), style="TButton").pack(fill=tk.X, pady=(0, 10))
+                ttk.Button(card, text="Toggle Status", command=lambda i=orig_idx: self.toggle_valve(i), style="Valve.Toggle.TButton").pack(fill=tk.X, pady=(0, 10))
                 ttk.Label(card, textvariable=valve_data["timer_var"], font=('Segoe UI', 9, 'italic'), foreground=self.style.lookup("Accent.TButton", "background")).pack(anchor="w")
 
                 info_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
                 info_frame.pack(fill=tk.X, pady=(5, 10))
-                ttk.Label(info_frame, text=f"Pin: {valve_data['pin']}", font=('Segoe UI', 9)).pack(anchor="w")
+                ttk.Label(info_frame, text=f"Pin: {valve_data['pin']}", font=label_font).pack(anchor="w")
                 num_schedules = len(valve_data.get('schedules', []))
                 sched_txt = f"⏰ {num_schedules} schedule(s) set" if num_schedules > 0 else "⏰ Not Scheduled"
-                sl = ttk.Label(info_frame, text=sched_txt, font=('Segoe UI', 9, "italic"), anchor="w", wraplength=180)
+                sl = ttk.Label(info_frame, text=sched_txt, font=(info_font[0], info_font[1], "italic"), anchor="w", wraplength=180)
                 sl.pack(anchor="w", fill=tk.X)
                 utils.tooltip(sl, "Open Master Scheduler to view/edit schedules")
                 note = valve_data.get('note', '')
                 if note:
-                    nl = ttk.Label(info_frame, text=f"📝 {note[:25]}{'...' if len(note)>25 else ''}", font=('Segoe UI', 9, "italic"), foreground="#B0BEC5" if self.theme == "dark" else "#78909C", anchor="w")
+                    nl = ttk.Label(info_frame, text=f"📝 {note[:25]}{'...' if len(note)>25 else ''}", font=(info_font[0], info_font[1], "italic"), foreground="#B0BEC5" if self.theme == "dark" else "#78909C", anchor="w")
                     nl.pack(anchor="w", fill=tk.X)
                     utils.tooltip(nl, f"Note: {note}")
 
@@ -1630,30 +1594,30 @@ class MainWindow:
 
     def update_system_clock(self):
         """
-         This method runs every second to update the main clock and now also
-         handles the live update for all active valve timers.
-         """
-         # Update the main system clock display
+        This method runs every second to update the main clock and now also
+        handles the live update for all active valve timers.
+        """
+        # Update the main system clock display
         self.system_time_var.set(f"Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-         # --- NEW TIMER LOGIC ---
+        # --- NEW TIMER LOGIC ---
         # Loop through all valves and update their timers if they are ON
         for valve in self.valves:
-         if valve.get("status") and valve.get("current_on_start_time"):
-            elapsed = time.time() - valve["current_on_start_time"]
-            valve["timer_var"].set(f"ON for: {utils.format_duration(elapsed)}")
-         elif not valve.get("status") and valve["timer_var"].get() != "":
-            # If the valve is off, ensure its timer text is cleared
-            valve["timer_var"].set("")
+            if valve.get("status") and valve.get("current_on_start_time"):
+                elapsed = time.time() - valve["current_on_start_time"]
+                valve["timer_var"].set(f"ON for: {utils.format_duration(elapsed)}")
+            elif not valve.get("status") and valve["timer_var"].get() != "":
+                # If the valve is off, ensure its timer text is cleared
+                valve["timer_var"].set("")
         # --- END OF NEW TIMER LOGIC ---
 
         # Publish the latest state to the web UI
         if self.mqtt_manager:
-           self.mqtt_manager.publish_state()
+            self.mqtt_manager.publish_state()
 
-         # Schedule this method to run again in 1 second
+        # Schedule this method to run again in 1 second
         if hasattr(self, 'root') and self.root.winfo_exists():
-         self.root.after(1000, self.update_system_clock)
+            self.root.after(1000, self.update_system_clock)
 
     def update_location_data(self):
         if self.api_key == "d7b8a4a58f2d8f3f8b9e8a7b9c8d7e6f": 
@@ -1691,6 +1655,9 @@ class MainWindow:
     
     def _setup_map_view(self):
         """Creates the UI for the Map View feature with scrollbars and edit controls."""
+        # preserve scale when reopening after UI refresh
+        self.map_scale = getattr(self, 'map_scale', 1.0)
+
         # Initialize instance variables for drawing/editing state
         self.is_in_draw_mode = False
         self.is_in_edit_mode = False
@@ -1716,11 +1683,19 @@ class MainWindow:
         edit_btn = ttk.Button(map_controls, text="🔧 Edit Zones", command=self._enter_edit_mode)
         edit_btn.pack(side=tk.LEFT, padx=5)
 
+        zoom_in_btn = ttk.Button(map_controls, text="➕ Zoom In", command=self._zoom_in)
+        zoom_in_btn.pack(side=tk.LEFT, padx=5)
+
+        zoom_out_btn = ttk.Button(map_controls, text="➖ Zoom Out", command=self._zoom_out)
+        zoom_out_btn.pack(side=tk.LEFT, padx=5)
+
+        reset_zoom_btn = ttk.Button(map_controls, text="🔄 Reset Zoom", command=self._reset_zoom)
+        reset_zoom_btn.pack(side=tk.LEFT, padx=5)
+
         # --- The Canvas and Scrollbars ---
         self.map_canvas = tk.Canvas(self.map_view_frame, bg=self.style.lookup("TEntry", "fieldbackground"), highlightthickness=0)
-        self.map_canvas.bind("<Double-Button-1>", self._on_section_double_click) # <-- ADD THIS LINE
-        self.map_v_scroll = ttk.Scrollbar(self.map_view_frame, orient="vertical", command=self.map_canvas.yview)
-        self.map_canvas = tk.Canvas(self.map_view_frame, bg=self.style.lookup("TEntry", "fieldbackground"), highlightthickness=0)
+        # section double-click events are bound directly when sections are drawn with tags
+        # self.map_canvas.bind("<Double-Button-1>", self._on_section_double_click)  # not used
         self.map_v_scroll = ttk.Scrollbar(self.map_view_frame, orient="vertical", command=self.map_canvas.yview)
         self.map_h_scroll = ttk.Scrollbar(self.map_view_frame, orient="horizontal", command=self.map_canvas.xview)
         self.map_canvas.configure(yscrollcommand=self.map_v_scroll.set, xscrollcommand=self.map_h_scroll.set)
@@ -1733,24 +1708,69 @@ class MainWindow:
         # --- Load existing data ---
         self.map_view_data = self.settings.get("map_view_data", {"image_path": None, "sections": []})
         self.map_image = None
+        self.map_image_original = None
+        self.map_image_item = None
+        self.map_scale = 1.0
 
         if self.map_view_data.get("image_path") and os.path.exists(self.map_view_data["image_path"]):
             self._load_map_image(self.map_view_data["image_path"])
+            # preserve zoom when returning to map view
+            self._render_map_image()
         
         self.root.after(100, self._draw_map_sections)
         return self.map_view_frame
 
     def _load_map_image(self, path):
-        """Loads and displays the background image on the canvas."""
+        """Loads and stores original map image, then renders it at current zoom."""
         try:
             img = Image.open(path)
-            self.map_image = ImageTk.PhotoImage(img)
-            self.map_canvas.create_image(0, 0, anchor="nw", image=self.map_image)
-            self.map_canvas.config(scrollregion=self.map_canvas.bbox("all"))
+            self.map_image_original = img.convert("RGBA")
+            # don't force reset on re-open. only reset on explicit reset action.
+            self.map_view_data["image_path"] = path
+            self.settings.set("map_view_data", self.map_view_data)
+            self._render_map_image()
             self.log(f"Map image loaded from {path}")
         except Exception as e:
             self.log(f"Error loading map image: {e}")
             messagebox.showerror("Error", f"Could not load map image from {path}.\n\n{e}", parent=self.root)
+
+    def _render_map_image(self):
+        if not self.map_image_original:
+            return
+
+        width, height = self.map_image_original.size
+        scaled_w = max(1, int(width * self.map_scale))
+        scaled_h = max(1, int(height * self.map_scale))
+
+        resized = self.map_image_original.resize((scaled_w, scaled_h), Image.LANCZOS)
+        self.map_image = ImageTk.PhotoImage(resized)
+
+        if self.map_image_item:
+            self.map_canvas.delete(self.map_image_item)
+
+        self.map_image_item = self.map_canvas.create_image(0, 0, anchor="nw", image=self.map_image)
+        self.map_canvas.tag_lower(self.map_image_item)
+
+        self.map_canvas.config(scrollregion=(0, 0, scaled_w, scaled_h))
+        self._draw_map_sections()
+
+    def _set_map_scale(self, scale):
+        old_scale = self.map_scale
+        self.map_scale = max(0.2, min(4.0, scale))
+        if abs(self.map_scale - old_scale) < 1e-6:
+            return
+
+        self._render_map_image()
+        self.map_canvas.config(scrollregion=self.map_canvas.bbox("all") or (0,0,0,0))
+
+    def _zoom_in(self):
+        self._set_map_scale(self.map_scale * 1.2)
+
+    def _zoom_out(self):
+        self._set_map_scale(self.map_scale / 1.2)
+
+    def _reset_zoom(self):
+        self._set_map_scale(1.0)
 
     def _upload_map_image(self):
         """Opens a file dialog to let the user select a new map image."""
@@ -1766,10 +1786,11 @@ class MainWindow:
         self.current_polygon_points = []
         self.map_canvas.config(cursor="crosshair")
         self.map_canvas.bind("<Button-1>", self._on_map_left_click)
+        self.map_canvas.bind("<Double-Button-1>", self._on_map_double_click)
         self.map_canvas.bind("<Button-3>", self._on_map_right_click)
         self.map_canvas.bind("<Motion>", self._on_map_mouse_move)
         self.root.bind("<Escape>", self._cancel_draw)
-        self.notify("Draw Mode: Left-click to add points, Right-click to finish.", 4000)
+        self.notify("Draw Mode: Left-click to add points, double-click or Right-click to finish.", 4000)
 
     def _exit_draw_mode(self):
         """Cleans up after drawing is complete or cancelled."""
@@ -1789,49 +1810,83 @@ class MainWindow:
             self._exit_draw_mode()
 
     def _on_map_left_click(self, event):
-        x, y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
-        self.current_polygon_points.extend([x, y])
-        dot = self.map_canvas.create_oval(x-3, y-3, x+3, y+3, fill=self.style.lookup("Accent.TButton", "background"), outline="")
+        canvas_x, canvas_y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
+        orig_x, orig_y = canvas_x / self.map_scale, canvas_y / self.map_scale
+        self.current_polygon_points.extend([orig_x, orig_y])
+
+        dot = self.map_canvas.create_oval(canvas_x-3, canvas_y-3, canvas_x+3, canvas_y+3,
+                                          fill=self.style.lookup("Accent.TButton", "background"), outline="")
         self.temp_draw_items.append(dot)
+
         if len(self.current_polygon_points) > 2:
-            line = self.map_canvas.create_line(self.current_polygon_points, fill="white", width=2)
+            scaled_points = [p * self.map_scale for p in self.current_polygon_points]
+            line = self.map_canvas.create_line(scaled_points, fill="white", width=max(1,int(2*self.map_scale)))
             self.temp_draw_items.append(line)
+
+        # auto-close by proximity to start (optional refinement)
+        if len(self.current_polygon_points) >= 8:
+            first_canvas_x = self.current_polygon_points[0] * self.map_scale
+            first_canvas_y = self.current_polygon_points[1] * self.map_scale
+            dist_to_start = math.hypot(canvas_x - first_canvas_x, canvas_y - first_canvas_y)
+            if dist_to_start <= 12:
+                self.log("Auto-completing and assigning zone: last point close to first point.")
+                self._complete_draw_section()
 
     def _on_map_mouse_move(self, event):
         if not self.is_in_draw_mode or not self.current_polygon_points: return
         if self.temp_draw_items and "rubber_band" in self.map_canvas.gettags(self.temp_draw_items[-1]):
             self.map_canvas.delete(self.temp_draw_items.pop())
-        last_x, last_y = self.current_polygon_points[-2], self.current_polygon_points[-1]
-        cursor_x, cursor_y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
-        line = self.map_canvas.create_line(last_x, last_y, cursor_x, cursor_y, fill="white", dash=(4, 4), tags="rubber_band")
+
+        last_x, last_y = self.current_polygon_points[-2] * self.map_scale, self.current_polygon_points[-1] * self.map_scale
+        cursor_canvas_x, cursor_canvas_y = self.map_canvas.canvasx(event.x), self.map_canvas.canvasy(event.y)
+
+        line = self.map_canvas.create_line(last_x, last_y, cursor_canvas_x, cursor_canvas_y,
+                                           fill="white", dash=(4, 4), tags="rubber_band")
         self.temp_draw_items.append(line)
 
     def _on_map_right_click(self, event):
+        self._complete_draw_section()
+
+    def _on_map_double_click(self, event):
+        if self.is_in_draw_mode:
+            self._complete_draw_section()
+        else:
+            return
+
+    def _complete_draw_section(self):
         if len(self.current_polygon_points) < 6:
             self.notify("A shape needs at least 3 points.", 3000)
             return
+
         coords = self.current_polygon_points
-        assigned_pins = {s['valve_pin'] for s in self.map_view_data['sections']}
+        assigned_pins = {s['valve_pin'] for s in self.map_view_data.get('sections', [])}
         available_valves = {f"{v['name']} (Pin {v['pin']})": i for i, v in enumerate(self.valves) if v['pin'] not in assigned_pins}
+
         if not available_valves:
             messagebox.showwarning("No Valves", "There are no available valves to assign.", parent=self.root)
             self._exit_draw_mode()
             return
+
         dialog = AssignValveDialog(self.root, available_valves)
         if dialog.result:
-            result, valve_index, new_name = dialog.result, dialog.result['valve_index'], dialog.result['name']
+            result = dialog.result
+            valve_index = result['valve_index']
+            new_name = result['name']
             valve_to_rename = self.valves[valve_index]
             self.log(f"Renaming valve '{valve_to_rename['name']}' to '{new_name}' via Map View.")
             valve_to_rename['name'] = new_name
             for plant, emoji in constants.PLANT_EMOJIS.items():
-                if plant in new_name.lower(): valve_to_rename["icon"] = emoji; break
+                if plant in new_name.lower():
+                    valve_to_rename["icon"] = emoji
+                    break
             new_section = {"coords": coords, "valve_pin": valve_to_rename['pin']}
-            self.map_view_data['sections'].append(new_section)
+            self.map_view_data.setdefault('sections', []).append(new_section)
             self.settings.set("map_view_data", self.map_view_data)
             self.save_state()
             self._draw_map_sections()
             self.filter_valves()
             self.notify(f"Zone '{new_name}' created and assigned to Pin {valve_to_rename['pin']}.")
+
         self._exit_draw_mode()
     
     def _enter_edit_mode(self):
@@ -1937,21 +1992,22 @@ class MainWindow:
             if not valve or not section.get('coords'): continue
 
             coords = section['coords']
+            scaled_coords = [c * self.map_scale for c in coords]
             fill_color = "#81C784" if valve.get('status') else "#546E7A"
             unique_tag = f"section_pin_{valve_pin}"
             
             # Draw the polygon and text with the unique tag
             self.map_canvas.create_polygon(
-                coords, outline=fill_color, fill=fill_color, stipple="gray50",
-                width=2, tags=("map_section", unique_tag)
+                scaled_coords, outline=fill_color, fill=fill_color, stipple="gray50",
+                width=max(1, int(2 * self.map_scale)), tags=("map_section", unique_tag)
             )
             
-            avg_x = sum(coords[i] for i in range(0, len(coords), 2)) / (len(coords) / 2)
-            avg_y = sum(coords[i] for i in range(1, len(coords), 2)) / (len(coords) / 2)
+            avg_x = sum(scaled_coords[i] for i in range(0, len(scaled_coords), 2)) / (len(scaled_coords) / 2)
+            avg_y = sum(scaled_coords[i] for i in range(1, len(scaled_coords), 2)) / (len(scaled_coords) / 2)
             
             self.map_canvas.create_text(
                 avg_x, avg_y, text=valve['name'], fill="white",
-                font=('Segoe UI', 10, 'bold'), tags=("map_section", unique_tag)
+                font=('Segoe UI', max(8, int(10 * self.map_scale)), 'bold'), tags=("map_section", unique_tag)
             )
 
             # --- THIS IS THE NEW, DIRECT BINDING ---
