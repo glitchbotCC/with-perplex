@@ -150,8 +150,8 @@ class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixi
         if hasattr(self, 'mqtt_status_var') and hasattr(self, 'mqtt_status_label'):
             self.mqtt_status_var.set(f"MQTT: {status}")
 
-            dark_colors = {"green": "#81C784", "red": "#E57373", "orange": "#FFB74D", "grey": "#90A4AE"}
-            light_colors = {"green": "#4CAF50", "red": "#D32F2F", "orange": "#FFA726", "grey": "#546E7A"}
+            dark_colors  = {"green": "#22C27A", "red": "#E84848", "orange": "#F59E0B", "grey": "#6D90B0"}
+            light_colors = {"green": "#059669", "red": "#DC2626", "orange": "#D97706", "grey": "#5A7899"}
 
             theme_colors = dark_colors if self.theme == "dark" else light_colors
 
@@ -501,114 +501,222 @@ class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixi
         self.layout_mode = "compact" if self.layout_mode == "comfortable" else "comfortable"
         self.settings.set("layout_mode", self.layout_mode)
         if hasattr(self, 'layout_toggle_btn'):
-            self.layout_toggle_btn.config(text="Compact View" if self.layout_mode == "comfortable" else "Comfort View")
+            self.layout_toggle_btn.config(text="⊡  Compact View" if self.layout_mode == "comfortable" else "⊞  Comfort View")
         self.render_valves_grid()
 
     def apply_theme(self):
         self.style.theme_use("clam")
 
-        # Friendly ambient palette: soft, approachable, high readability
-        slate_bg = "#1F2A38"            # dark background
-        slate_card_bg = "#2B3C52"       # dark card container
-        slate_text = "#DCE7F2"          # light text on dark
-        slate_border = "#4A5F7E"        # subtle border
-        slate_accent_green = "#4CABDB"   # friendly blue accent
-        slate_accent_fg = "#FFFFFF"      # accent text for dark
-        slate_error_red = "#F0575D"     # softer danger
-
-        slate_light_bg = "#F1F4F8"      # light background
-        slate_light_card_bg = "#FFFFFF"  # light cards
-        slate_light_text = "#2D3E50"    # dark text on light
-        slate_light_border = "#CCE0F2"  # light border
-        slate_light_accent_green = "#5C96D5" # calm accent
-        slate_light_accent_fg = "#FFFFFF"   # accent text
-        slate_light_error_red = "#DD5B64"  # soften red
-
+        # ── Professional two-tier palette ──────────────────────────────────
         if self.theme == "dark":
-            bg, fg, frame_bg, border = slate_bg, slate_text, slate_card_bg, slate_border
-            accent, accent_fg = slate_accent_green, slate_accent_fg
-            emergency, emergency_fg = slate_error_red, slate_light_accent_fg
-            locked_bg = "#212b30"
-            entry_bg, entry_fg, entry_insert = "#455A64", fg, accent
-            tree_bg, tree_fg, tree_sel_bg = slate_card_bg, fg, "#546E7A"
-            btn_bg, btn_fg, btn_active_bg = slate_card_bg, fg, "#455A64"
-        else: 
-            bg, fg, frame_bg, border = slate_light_bg, slate_light_text, slate_light_card_bg, slate_light_border
-            accent, accent_fg = slate_light_accent_green, slate_light_accent_fg
-            emergency, emergency_fg = slate_light_error_red, slate_light_accent_fg
-            locked_bg = "#CFD8DC"
-            entry_bg, entry_fg, entry_insert = slate_light_card_bg, fg, accent
-            tree_bg, tree_fg, tree_sel_bg = slate_light_card_bg, fg, "#C8E6C9"
-            btn_bg, btn_fg, btn_active_bg = "#B0BEC5", fg, "#90A4AE"
+            bg          = "#0F1923"   # page background (deep navy)
+            frame_bg    = "#1A2D42"   # elevated card / panel surface
+            widget_bg   = "#152233"   # inset widget container (slightly darker than frame)
+            fg          = "#DCE9F5"   # primary text
+            fg_muted    = "#6D90B0"   # secondary / hint text
+            accent      = "#3B9EE8"   # primary accent (sky blue)
+            accent_dark = "#2878C4"   # accent pressed / hover darker
+            accent_fg   = "#FFFFFF"
+            success     = "#22C27A"   # valve ON indicator
+            emergency   = "#E84848"   # danger / emergency
+            emergency_fg= "#FFFFFF"
+            locked_bg   = "#131D27"
+            border      = "#253D58"
+            entry_bg    = "#152234"
+            entry_fg    = fg
+            entry_insert= accent
+            btn_bg      = "#1E3550"
+            btn_fg      = fg
+            btn_active  = "#25415F"
+            tree_bg     = frame_bg
+            tree_fg     = fg
+            tree_sel_bg = "#1E4068"
+        else:
+            bg          = "#F2F6FC"   # page background (cool off-white)
+            frame_bg    = "#FFFFFF"   # card surface
+            widget_bg   = "#E8EEF9"   # inset widget container
+            fg          = "#182336"   # primary text (deep slate)
+            fg_muted    = "#5A7899"   # secondary / hint text
+            accent      = "#2563EB"   # professional blue
+            accent_dark = "#1A4FC7"
+            accent_fg   = "#FFFFFF"
+            success     = "#059669"   # valve ON indicator
+            emergency   = "#DC2626"
+            emergency_fg= "#FFFFFF"
+            locked_bg   = "#EDF2FB"
+            border      = "#C0D4EF"
+            entry_bg    = "#FFFFFF"
+            entry_fg    = fg
+            entry_insert= accent
+            btn_bg      = "#DDE7F7"
+            btn_fg      = fg
+            btn_active  = "#C8D9F4"
+            tree_bg     = "#FFFFFF"
+            tree_fg     = fg
+            tree_sel_bg = "#DBEAFE"
 
-        self.style.configure(".", background=bg, foreground=fg, bordercolor=border, font=('Segoe UI', 10))
+        # store for use in other methods
+        self._theme_accent      = accent
+        self._theme_accent_dark = accent_dark
+        self._theme_accent_fg   = accent_fg
+        self._theme_success     = success
+        self._theme_fg_muted    = fg_muted
+        self._theme_frame_bg    = frame_bg
+        self._theme_fg          = fg
+
+        # ── Base ──────────────────────────────────────────────────────────
+        self.style.configure(".",
+            background=bg, foreground=fg, bordercolor=border,
+            font=('Segoe UI', 10))
         self.style.configure("TFrame", background=bg)
         self.style.configure("TLabel", background=bg, foreground=fg)
-        self.style.configure("Header.TLabel", font=("Segoe UI Semibold", 26), background=bg, foreground=fg)
-        self.style.configure("Subheader.TLabel", font=("Segoe UI", 13), background=bg, foreground=fg)
-        
-        self.style.configure("TButton", background=btn_bg, foreground=btn_fg, borderwidth=0, relief="flat", font=('Segoe UI', 10, 'bold'), padding=(10, 7))
-        self.style.map("TButton", background=[('active', btn_active_bg), ('pressed', btn_active_bg)])
 
-        self.style.configure("Accent.TButton", background=accent, foreground=accent_fg, borderwidth=0, relief="flat", font=('Segoe UI', 10, 'bold'), padding=(10, 7))
-        self.style.map("Accent.TButton", background=[('active', accent), ('pressed', accent)])
+        # ── Typography hierarchy ──────────────────────────────────────────
+        self.style.configure("Header.TLabel",
+            font=("Segoe UI Semibold", 26), background=bg, foreground=fg)
+        self.style.configure("Subheader.TLabel",
+            font=("Segoe UI", 13), background=bg, foreground=fg_muted)
+        self.style.configure("Muted.TLabel",
+            background=bg, foreground=fg_muted, font=('Segoe UI', 9, 'italic'))
 
-        self.style.configure("Emergency.TButton", background=emergency, foreground=emergency_fg, borderwidth=0, relief="flat", font=('Segoe UI', 10, 'bold'), padding=(10, 7))
-        self.style.map("Emergency.TButton", background=[('active', emergency), ('pressed', emergency)])
+        # ── Buttons ───────────────────────────────────────────────────────
+        self.style.configure("TButton",
+            background=btn_bg, foreground=btn_fg,
+            borderwidth=0, relief="flat",
+            font=('Segoe UI', 10, 'bold'), padding=(12, 8))
+        self.style.map("TButton",
+            background=[('active', btn_active), ('pressed', btn_active)])
 
-        # apply softer button aesthetics for friendly UI
-        self.style.configure("Modern.TButton", background="#5C96D5", foreground="#FFFFFF", borderwidth=0, relief="flat", padding=(8, 6), font=('Segoe UI', 10, 'bold'))
-        self.style.map("Modern.TButton", background=[('active', '#4A84B9'), ('pressed', '#3E6C97')])
+        self.style.configure("Accent.TButton",
+            background=accent, foreground=accent_fg,
+            borderwidth=0, relief="flat",
+            font=('Segoe UI', 10, 'bold'), padding=(12, 8))
+        self.style.map("Accent.TButton",
+            background=[('active', accent_dark), ('pressed', accent_dark)])
 
-        self.style.configure("Valve.Toggle.TButton", background="#5C96D5", foreground="#FFFFFF", borderwidth=1, relief="solid", padding=(8, 6), font=('Segoe UI', 10, 'bold'))
-        self.style.map("Valve.Toggle.TButton", 
-                       background=[('active', '#4A84B9'), ('pressed', '#3E6C97')],
-                       bordercolor=[('active', '#6AA9D8'), ('!active', '#5C96D5')])
+        self.style.configure("Emergency.TButton",
+            background=emergency, foreground=emergency_fg,
+            borderwidth=0, relief="flat",
+            font=('Segoe UI', 10, 'bold'), padding=(12, 8))
+        self.style.map("Emergency.TButton",
+            background=[('active', emergency), ('pressed', emergency)])
 
-        # Note: ttk doesn't support real rounded corners in many themes; we simulate softer edges
-        self.style.configure("Card.TFrame", background=frame_bg, borderwidth=0, relief="flat", bordercolor=border, padding=12)
+        self.style.configure("Modern.TButton",
+            background=accent, foreground=accent_fg,
+            borderwidth=0, relief="flat",
+            padding=(12, 8), font=('Segoe UI', 10, 'bold'))
+        self.style.map("Modern.TButton",
+            background=[('active', accent_dark), ('pressed', accent_dark)])
+
+        self.style.configure("Valve.Toggle.TButton",
+            background=success, foreground="#FFFFFF",
+            borderwidth=0, relief="flat",
+            padding=(10, 8), font=('Segoe UI', 10, 'bold'))
+        self.style.map("Valve.Toggle.TButton",
+            background=[('active', accent_dark), ('pressed', accent_dark)])
+
+        # ── Cards / Frames ────────────────────────────────────────────────
+        self.style.configure("Card.TFrame",
+            background=frame_bg, borderwidth=1, relief="solid",
+            bordercolor=border, padding=15)
         self.style.map("Card.TFrame", background=[('active', frame_bg)])
-        self.style.configure("Card.TFrame.Label", background=frame_bg, foreground=fg, font=('Segoe UI Semibold', 11))
+        self.style.configure("Card.TFrame.Label",
+            background=frame_bg, foreground=accent,
+            font=('Segoe UI Semibold', 10))
 
-        self.style.configure("Rounded.TFrame", background=frame_bg, borderwidth=0, relief="flat", padding=12)
+        self.style.configure("Rounded.TFrame",
+            background=frame_bg, borderwidth=1, relief="solid",
+            bordercolor=border, padding=15)
 
-        # Modern mode styling
         self.style.configure("Modern.TFrame", background=frame_bg)
-        self.style.configure("Modern.TLabel", background=frame_bg, foreground=fg, font=('Segoe UI', 11))
-        self.style.configure("Modern.Header.TLabel", font=('Segoe UI Semibold', 28), background=frame_bg, foreground=fg)
-        self.style.configure("Modern.Subheader.TLabel", font=('Segoe UI', 13), background=frame_bg, foreground=fg)
+        self.style.configure("Modern.TLabel",
+            background=frame_bg, foreground=fg, font=('Segoe UI', 11))
+        self.style.configure("Modern.Header.TLabel",
+            font=('Segoe UI Semibold', 28), background=frame_bg, foreground=fg)
+        self.style.configure("Modern.Subheader.TLabel",
+            font=('Segoe UI', 13), background=frame_bg, foreground=fg_muted)
 
-        self.style.configure("Modern.TButton", background="#388E3C", foreground="#FFFFFF", borderwidth=0, padding=(10, 8), font=('Segoe UI', 10, 'bold'))
-        self.style.map("Modern.TButton", background=[('active', '#2E7D32'), ('pressed', '#1B5E20')])
+        # ── LabelFrame ────────────────────────────────────────────────────
+        self.style.configure("TLabelframe",
+            background=frame_bg, bordercolor=border,
+            borderwidth=1, relief="solid", padding=12)
+        self.style.configure("TLabelframe.Label",
+            background=frame_bg, foreground=accent,
+            font=('Segoe UI Semibold', 10))
 
-        self.style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg, insertcolor=entry_insert, borderwidth=0, relief="flat", font=('Segoe UI', 10), padding=6)
-        self.style.map("TEntry", fieldbackground=[('focus', '#ffffff')], foreground=[('focus', '#000000')])
+        # ── Entry / Combobox ──────────────────────────────────────────────
+        self.style.configure("TEntry",
+            fieldbackground=entry_bg, foreground=entry_fg,
+            insertcolor=entry_insert, borderwidth=1, relief="solid",
+            bordercolor=border, font=('Segoe UI', 10), padding=(8, 6))
+        self.style.map("TEntry",
+            fieldbackground=[('focus', frame_bg if self.theme == 'dark' else '#FFFFFF')],
+            foreground=[('focus', fg)],
+            bordercolor=[('focus', accent)])
 
-        self.style.configure("TCombobox", fieldbackground=entry_bg, background=entry_bg, foreground=entry_fg, borderwidth=0, relief="flat", padding=6)
-        self.style.map("TCombobox", fieldbackground=[('readonly', '#ffffff'), ('!readonly', entry_bg)])
+        self.style.configure("TCombobox",
+            fieldbackground=entry_bg, background=btn_bg,
+            foreground=entry_fg, arrowcolor=fg,
+            insertcolor=entry_insert, bordercolor=border,
+            borderwidth=1, relief="solid", padding=(8, 6))
+        self.style.map("TCombobox",
+            fieldbackground=[('readonly', entry_bg), ('!readonly', entry_bg)],
+            selectbackground=[('readonly', tree_sel_bg)],
+            selectforeground=[('readonly', fg)])
 
-        self.style.configure("TScrollbar", troughcolor=bg, background=frame_bg, arrowcolor=fg, borderwidth=0, relief="flat")
-        self.style.configure("TRadiobutton", background=frame_bg, foreground=fg, font=('Segoe UI', 10))
-        self.style.map("TRadiobutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', frame_bg)])
-        self.style.configure("TCheckbutton", background=frame_bg, foreground=fg)
-        self.style.map("TCheckbutton", indicatorcolor=[('selected', accent), ('!selected', border)], background=[('active', frame_bg)])
-        
-        self.style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg, font=('Segoe UI', 10), rowheight=28, borderwidth=0, relief='flat')
-        self.style.map("Treeview", background=[('selected', tree_sel_bg)], foreground=[('selected', accent_fg if self.theme == 'dark' else fg)])
-        self.style.configure("Treeview.Heading", background=bg, foreground=fg, relief="flat", borderwidth=0, padding=5)
+        # ── Scrollbars ────────────────────────────────────────────────────
+        self.style.configure("TScrollbar",
+            troughcolor=widget_bg, background=border,
+            arrowcolor=fg_muted, borderwidth=0, relief="flat", width=8)
 
-        self.style.configure("TCombobox", fieldbackground=entry_bg, background=btn_bg, foreground=entry_fg, arrowcolor=fg, insertcolor=entry_insert, bordercolor=border)
-        self.style.map('TCombobox', selectbackground=[('readonly', tree_sel_bg)], selectforeground=[('readonly', fg)])
+        # ── Radio / Check ─────────────────────────────────────────────────
+        self.style.configure("TRadiobutton",
+            background=frame_bg, foreground=fg, font=('Segoe UI', 10))
+        self.style.map("TRadiobutton",
+            indicatorcolor=[('selected', accent), ('!selected', border)],
+            background=[('active', frame_bg)])
+        self.style.configure("TCheckbutton",
+            background=frame_bg, foreground=fg, font=('Segoe UI', 10))
+        self.style.map("TCheckbutton",
+            indicatorcolor=[('selected', accent), ('!selected', border)],
+            background=[('active', frame_bg)])
 
-        self.style.configure("TNotebook", background=bg, borderwidth=0, relief='flat')
-        self.style.configure("TNotebook.Tab", background=frame_bg, foreground=fg, borderwidth=0, relief='flat', padding=(12, 8), font=('Segoe UI', 10, 'bold'))
+        # ── Treeview ──────────────────────────────────────────────────────
+        self.style.configure("Treeview",
+            background=tree_bg, foreground=tree_fg,
+            fieldbackground=tree_bg, font=('Segoe UI', 10),
+            rowheight=30, borderwidth=0, relief='flat')
+        self.style.map("Treeview",
+            background=[('selected', tree_sel_bg)],
+            foreground=[('selected', accent_fg if self.theme == 'dark' else fg)])
+        self.style.configure("Treeview.Heading",
+            background=widget_bg, foreground=fg,
+            relief="flat", borderwidth=0,
+            padding=(8, 6), font=('Segoe UI', 10, 'bold'))
+
+        # ── Notebook ──────────────────────────────────────────────────────
+        self.style.configure("TNotebook",
+            background=bg, borderwidth=0, relief='flat')
+        self.style.configure("TNotebook.Tab",
+            background=widget_bg, foreground=fg_muted,
+            borderwidth=0, relief='flat',
+            padding=(16, 9), font=('Segoe UI', 10, 'bold'))
         self.style.map("TNotebook.Tab",
-                       background=[('selected', accent), ('!selected', frame_bg)],
-                       foreground=[('selected', accent_fg), ('!selected', fg)])
+            background=[('selected', accent), ('!selected', widget_bg)],
+            foreground=[('selected', accent_fg), ('!selected', fg_muted)])
 
-        self.style.configure("Valve.Card.TFrame", background=frame_bg, borderwidth=1, relief="solid")
-        self.style.map("Valve.Card.TFrame", bordercolor=[('!focus', accent), ('active', accent)])
-        self.style.configure("Locked.Valve.Card.TFrame", background=locked_bg, bordercolor=emergency)
+        # ── Separator ─────────────────────────────────────────────────────
+        self.style.configure("TSeparator", background=border)
+
+        # ── Valve Cards ───────────────────────────────────────────────────
+        self.style.configure("Valve.Card.TFrame",
+            background=frame_bg, borderwidth=1, relief="solid",
+            bordercolor=border)
+        self.style.map("Valve.Card.TFrame",
+            bordercolor=[('!focus', border), ('active', accent)])
+        self.style.configure("Locked.Valve.Card.TFrame",
+            background=locked_bg, borderwidth=1, relief="solid",
+            bordercolor=emergency)
 
         if hasattr(self, 'root'):
             self.root.configure(bg=bg)
@@ -620,82 +728,88 @@ class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixi
 
         self.setup_menu()
 
-        top_frame = ttk.Frame(self.root, style="Modern.TFrame", padding=(30, 15, 30, 10))
+        top_frame = ttk.Frame(self.root, style="Modern.TFrame", padding=(32, 18, 32, 12))
         top_frame.pack(fill=tk.X, side=tk.TOP)
 
+        # ── Header: logo + title ─────────────────────────────────────────
         header = ttk.Frame(top_frame, style="Modern.TFrame")
-        header.pack(fill=tk.X, pady=(5, 2))
-        ttk.Label(header, text="👨‍🌾", font=("Segoe UI Emoji", 36), style="Modern.Header.TLabel").pack(side=tk.LEFT, padx=(0, 15), pady=10)
+        header.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(header, text="👨‍🌾", font=("Segoe UI Emoji", 38), style="Modern.Header.TLabel").pack(side=tk.LEFT, padx=(0, 16), pady=8)
         title_frame = ttk.Frame(header, style="Modern.TFrame")
-        title_frame.pack(side=tk.LEFT, pady=10, anchor="w")
+        title_frame.pack(side=tk.LEFT, pady=8, anchor="w")
         ttk.Label(title_frame, text=constants.APP_NAME, style="Modern.Header.TLabel").pack(anchor="w")
         ttk.Label(title_frame, text="Automate and Monitor Your Irrigation System", style="Modern.Subheader.TLabel").pack(anchor="w")
 
-        dash = ttk.Frame(top_frame, style="TFrame")
-        dash.pack(fill=tk.X, pady=(15, 10))
-        dash_font = ('Segoe UI Semibold', 11)
-        self.dash_valves = ttk.Label(dash, text="Valves: -", style="TLabel", font=dash_font)
-        self.dash_valves.pack(side=tk.LEFT, padx=10)
-        self.dash_on = ttk.Label(dash, text="ON: -", style="TLabel", font=dash_font)
-        self.dash_on.pack(side=tk.LEFT, padx=10)
-        self.dash_logs = ttk.Label(dash, text="Logs: -", style="TLabel", font=dash_font)
-        self.dash_logs.pack(side=tk.LEFT, padx=10)
-        dash_right_frame = ttk.Frame(dash)
-        dash_right_frame.pack(side=tk.RIGHT)
-        # <-- Add the MQTT status label here
-        self.mqtt_status_label = ttk.Label(dash_right_frame, textvariable=self.mqtt_status_var, font=dash_font)
-        self.mqtt_status_label.pack(anchor='e')
-        ttk.Label(dash_right_frame, textvariable=self.location_var, font=dash_font).pack(anchor='e')
-        ttk.Label(dash_right_frame, textvariable=self.live_weather_var, font=dash_font).pack(anchor='e')
-        ttk.Label(dash_right_frame, textvariable=self.system_time_var, font=dash_font).pack(anchor='e')
+        ttk.Separator(top_frame, orient="horizontal").pack(fill=tk.X, pady=(8, 0))
 
-        top_controls_card = ttk.Labelframe(top_frame, text="System Controls & Search", style="Card.TFrame", padding=(15, 10))
-        top_controls_card.pack(pady=10, fill=tk.X)
+        # ── Status bar ───────────────────────────────────────────────────
+        dash = ttk.Frame(top_frame, style="Modern.TFrame")
+        dash.pack(fill=tk.X, pady=(10, 8))
+        dash_font_bold = ('Segoe UI Semibold', 10)
+        dash_font_reg  = ('Segoe UI', 10)
+        self.dash_valves = ttk.Label(dash, text="Valves: -", style="Modern.TLabel", font=dash_font_bold)
+        self.dash_valves.pack(side=tk.LEFT, padx=(0, 18))
+        self.dash_on = ttk.Label(dash, text="ON: -", style="Modern.TLabel", font=dash_font_bold)
+        self.dash_on.pack(side=tk.LEFT, padx=(0, 18))
+        self.dash_logs = ttk.Label(dash, text="Logs: -", style="Modern.TLabel", font=dash_font_bold)
+        self.dash_logs.pack(side=tk.LEFT, padx=(0, 18))
+        dash_right_frame = ttk.Frame(dash, style="Modern.TFrame")
+        dash_right_frame.pack(side=tk.RIGHT)
+        self.mqtt_status_label = ttk.Label(dash_right_frame, textvariable=self.mqtt_status_var, font=dash_font_reg, style="Modern.TLabel")
+        self.mqtt_status_label.pack(anchor='e')
+        ttk.Label(dash_right_frame, textvariable=self.location_var,    font=dash_font_reg, style="Modern.TLabel").pack(anchor='e')
+        ttk.Label(dash_right_frame, textvariable=self.live_weather_var, font=dash_font_reg, style="Modern.TLabel").pack(anchor='e')
+        ttk.Label(dash_right_frame, textvariable=self.system_time_var,  font=dash_font_reg, style="Modern.TLabel").pack(anchor='e')
+
+        # ── Controls card ────────────────────────────────────────────────
+        top_controls_card = ttk.Labelframe(top_frame, text="  System Controls & Search  ", padding=(18, 12))
+        top_controls_card.pack(pady=(4, 6), fill=tk.X)
+
         add_search_frame = ttk.Frame(top_controls_card)
-        add_search_frame.pack(pady=8, padx=8, fill=tk.X)
+        add_search_frame.pack(pady=(0, 8), fill=tk.X)
+
         add_frame = ttk.Frame(add_search_frame)
-        add_frame.pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(add_frame, text=f"Valves to add (1-{constants.MAX_VALVES}):").pack(side=tk.LEFT, pady=(0, 3))
+        add_frame.pack(side=tk.LEFT, padx=(0, 24))
+        ttk.Label(add_frame, text=f"Valves to add (1–{constants.MAX_VALVES}):").pack(side=tk.LEFT, padx=(0, 6))
         self.valve_entry = ttk.Entry(add_frame, textvariable=self.valve_count_var, width=5, style="TEntry", font=('Segoe UI', 10))
-        self.valve_entry.pack(side=tk.LEFT, padx=7)
-        self.add_valves_btn = ttk.Button(add_frame, text="Add", command=self.add_valves, style="Accent.TButton")
+        self.valve_entry.pack(side=tk.LEFT, padx=(0, 6))
+        self.add_valves_btn = ttk.Button(add_frame, text="➕  Add", command=self.add_valves, style="Accent.TButton")
         self.add_valves_btn.pack(side=tk.LEFT)
         utils.tooltip(self.add_valves_btn, "Add new valves (Ctrl+N)")
+
         search_frame = ttk.Frame(add_search_frame)
         search_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(search_frame, text="🔍 Search:", font=("Segoe UI Emoji", 12)).pack(side=tk.LEFT)
+        ttk.Label(search_frame, text="🔍", font=("Segoe UI Emoji", 12)).pack(side=tk.LEFT, padx=(0, 6))
         self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=35, style="TEntry", font=('Segoe UI', 10))
-        self.search_entry.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         utils.tooltip(self.search_entry, "Search by name, note, 'on', 'off', or 'pin:X' (Ctrl+F)")
         self.search_entry.bind("<KeyRelease>", lambda _: self.filter_valves())
+
         btn_group_frame = ttk.Frame(top_controls_card)
-        btn_group_frame.pack(pady=(8, 8), padx=8, fill=tk.X, expand=True)
+        btn_group_frame.pack(pady=(0, 4), fill=tk.X, expand=True)
         
-        self.scheduler_btn = ttk.Button(btn_group_frame, text="Scheduler 📅", command=self.open_scheduler_window, style="Modern.TButton")
-        self.scheduler_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        self.scheduler_btn = ttk.Button(btn_group_frame, text="📅  Scheduler", command=self.open_scheduler_window, style="Modern.TButton")
+        self.scheduler_btn.pack(side=tk.LEFT, padx=4, pady=2, fill=tk.X, expand=True)
         utils.tooltip(self.scheduler_btn, "Ctrl+Alt+S")
 
-        self.reset_valves_btn = ttk.Button(btn_group_frame, text="Reset All ♻️", command=self.reset_valves, style="Modern.TButton")
-        self.reset_valves_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        self.reset_valves_btn = ttk.Button(btn_group_frame, text="♻️  Reset All", command=self.reset_valves, style="Modern.TButton")
+        self.reset_valves_btn.pack(side=tk.LEFT, padx=4, pady=2, fill=tk.X, expand=True)
         utils.tooltip(self.reset_valves_btn, "Ctrl+R")
-        
-        self.layout_toggle_btn = ttk.Button(btn_group_frame, text="Compact View" if self.layout_mode == "comfortable" else "Comfort View", command=self.toggle_layout_mode, style="Modern.TButton")
-        self.layout_toggle_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+
+        self.layout_toggle_btn = ttk.Button(
+            btn_group_frame,
+            text="⊡  Compact View" if self.layout_mode == "comfortable" else "⊞  Comfort View",
+            command=self.toggle_layout_mode, style="Modern.TButton")
+        self.layout_toggle_btn.pack(side=tk.LEFT, padx=4, pady=2, fill=tk.X, expand=True)
         utils.tooltip(self.layout_toggle_btn, "Toggle layout mode")
 
-        self.emergency_off_btn = ttk.Button(btn_group_frame, text="🚨 Turn All Systems OFF", command=self.turn_all_systems_off, style="Emergency.TButton")
-        self.emergency_off_btn.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
+        self.emergency_off_btn = ttk.Button(btn_group_frame, text="🚨  Emergency OFF", command=self.turn_all_systems_off, style="Emergency.TButton")
+        self.emergency_off_btn.pack(side=tk.LEFT, padx=4, pady=2, fill=tk.X, expand=True)
         utils.tooltip(self.emergency_off_btn, "Immediately turns OFF all valves and aux controls.")
-
-        # Modern style sticky controls
-        self.add_valves_btn.config(style="Modern.TButton")
-        self.valve_entry.configure(style="TEntry")
-        self.search_entry.configure(style="TEntry")
-
 
         # Create a PanedWindow to hold the main content and the right-side panel
         self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL, style="TPanedwindow")
-        self.main_pane.pack(fill=tk.BOTH, expand=True, padx=30, pady=(0, 10))
+        self.main_pane.pack(fill=tk.BOTH, expand=True, padx=32, pady=(0, 10))
         
         # --- Create a Notebook (Tabs) for the main left-side view ---
         self.notebook = ttk.Notebook(self.main_pane, style="TNotebook")
@@ -759,17 +873,20 @@ class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixi
         if not self.hardware.is_pi:
             ttk.Label(sensor_lf, text="(Simulation Mode)", font=('Segoe UI', 8, 'italic')).grid(row=len(sensor_labels), column=0, columnspan=2, pady=10)
 
-        self.footer = ttk.Frame(self.root, style="TFrame", padding=(30, 5))
-        self.footer.pack(fill=tk.X, side=tk.BOTTOM, pady=(5, 10))
+        self.footer = ttk.Frame(self.root, style="Modern.TFrame", padding=(32, 6))
+        self.footer.pack(fill=tk.X, side=tk.BOTTOM, pady=(4, 10))
         self.footer.columnconfigure(0, weight=1)
-        self.footer_label = ttk.Label(self.footer, text="System Ready.", anchor="w", font=('Segoe UI', 10))
+        self.footer_label = ttk.Label(self.footer, text="System Ready.", anchor="w",
+                                      font=('Segoe UI', 10), style="Modern.TLabel")
         self.footer_label.pack(side=tk.LEFT)
-        
-        self.lock_btn_footer = ttk.Button(self.footer, text="Lock Config 🔒", command=self.toggle_configuration_lock, style="TButton")
-        self.lock_btn_footer.pack(side=tk.RIGHT, padx=5)
-        
-        theme_btn_footer = ttk.Button(self.footer, text="🌗 Theme", command=self.toggle_theme, style="TButton")
-        theme_btn_footer.pack(side=tk.RIGHT, padx=5)
+
+        self.lock_btn_footer = ttk.Button(self.footer, text="🔒  Lock Config",
+                                          command=self.toggle_configuration_lock, style="TButton")
+        self.lock_btn_footer.pack(side=tk.RIGHT, padx=4)
+
+        theme_btn_footer = ttk.Button(self.footer, text="🌗  Theme",
+                                      command=self.toggle_theme, style="TButton")
+        theme_btn_footer.pack(side=tk.RIGHT, padx=4)
         utils.tooltip(theme_btn_footer, "Toggle Dark/Light Theme (Ctrl+T)")
 
         self.root.after(100, self._set_initial_sash)
@@ -913,23 +1030,28 @@ class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixi
 
         # layout style switching
         if self.layout_mode == "compact":
-            card_padding = 8
+            card_padding = 10
             font_base = ('Segoe UI', 10)
             label_font = ('Segoe UI', 9)
             info_font = ('Segoe UI', 8)
         else:
-            card_padding = 12
+            card_padding = 14
             font_base = ('Segoe UI', 12)
             label_font = ('Segoe UI', 10)
             info_font = ('Segoe UI', 9)
 
+        success_color = getattr(self, '_theme_success', '#22C27A')
+        accent_color  = getattr(self, '_theme_accent',  '#3B9EE8')
+        muted_color   = getattr(self, '_theme_fg_muted', '#6D90B0')
+
         if not self.filtered_valves:
             no_valves_frame = ttk.Frame(self.valve_card_frame, style="TFrame")
-            no_valves_frame.pack(padx=20, pady=40)
-            ttk.Label(no_valves_frame, text="📭", font=("Segoe UI Emoji", 48)).pack()
-            ttk.Label(no_valves_frame, text="No valves configured or matching search.", font=('Segoe UI', 12, 'italic')).pack(pady=10)
+            no_valves_frame.pack(padx=20, pady=60)
+            ttk.Label(no_valves_frame, text="📭", font=("Segoe UI Emoji", 52)).pack()
+            ttk.Label(no_valves_frame, text="No valves configured or matching search.",
+                      font=('Segoe UI', 12, 'italic')).pack(pady=12)
         else:
-            card_min_width = 260
+            card_min_width = 270
             canvas_width = self.valve_canvas.winfo_width()
             num_columns = max(1, canvas_width // card_min_width)
             for idx, valve_data in enumerate(self.filtered_valves):
@@ -945,53 +1067,84 @@ class MainWindow(ValveManagerMixin, SchedulerManagerMixin, AutomationManagerMixi
                 card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
                 self.valve_card_frame.columnconfigure(col, weight=1)
 
-                is_on = valve_data.get("status")
-                icon = valve_data.get("icon", "💧")
-                status_txt = "🟢" if is_on else ("🔴" if valve_data.get("locked") and is_on else "⚪")
-                status_color = "#81C784" if is_on else ("#E57373" if valve_data.get("locked") else self.style.lookup("TLabel", "foreground"))
+                is_on    = valve_data.get("status")
+                is_locked = valve_data.get("locked")
+                icon     = valve_data.get("icon", "💧")
 
+                status_txt   = "🟢" if is_on else ("🔴" if is_locked else "⚫")
+                status_color = success_color if is_on else (
+                    self.style.lookup("Emergency.TButton", "background") if is_locked
+                    else muted_color)
+
+                # Card header
                 header_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
                 header_frame.pack(fill=tk.X, pady=(0, 8))
-                status_lbl = ttk.Label(header_frame, text=status_txt, style="TLabel", foreground=status_color, font=("Segoe UI Emoji", 16 if self.layout_mode == "comfortable" else 14))
+                status_lbl = ttk.Label(
+                    header_frame, text=status_txt, style="TLabel",
+                    foreground=status_color,
+                    font=("Segoe UI Emoji", 15 if self.layout_mode == "comfortable" else 13))
                 status_lbl.pack(side=tk.LEFT, padx=(0, 8))
-                utils.tooltip(status_lbl, f"Valve ON" if is_on else f"Valve OFF { '(Locked)' if valve_data.get('locked') else ''}")
+                utils.tooltip(status_lbl, "Valve ON" if is_on else f"Valve OFF{' (Locked)' if is_locked else ''}")
                 self.valve_status_labels.append(status_lbl)
-                ttk.Label(header_frame, text=f"{icon} {valve_data['name']}", font=(font_base[0], font_base[1] + 2, 'bold')).pack(side=tk.LEFT, anchor="w")
+                ttk.Label(
+                    header_frame,
+                    text=f"{icon} {valve_data['name']}",
+                    font=(font_base[0], font_base[1] + 1, 'bold')
+                ).pack(side=tk.LEFT, anchor="w")
 
-                ttk.Button(card, text="Toggle Status", command=lambda i=orig_idx: self.toggle_valve(i), style="Valve.Toggle.TButton").pack(fill=tk.X, pady=(0, 10))
-                ttk.Label(card, textvariable=valve_data["timer_var"], font=('Segoe UI', 9, 'italic'), foreground=self.style.lookup("Accent.TButton", "background")).pack(anchor="w")
+                # Toggle button — prominent
+                ttk.Button(
+                    card, text="⏻  Toggle",
+                    command=lambda i=orig_idx: self.toggle_valve(i),
+                    style="Valve.Toggle.TButton"
+                ).pack(fill=tk.X, pady=(0, 6), ipady=2)
 
+                ttk.Label(
+                    card, textvariable=valve_data["timer_var"],
+                    font=('Segoe UI', 9, 'italic'),
+                    foreground=accent_color
+                ).pack(anchor="w")
+
+                # Info section
                 info_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
-                info_frame.pack(fill=tk.X, pady=(5, 10))
-                ttk.Label(info_frame, text=f"Pin: {valve_data['pin']}", font=label_font).pack(anchor="w")
+                info_frame.pack(fill=tk.X, pady=(6, 8))
+                ttk.Label(info_frame, text=f"📌 Pin {valve_data['pin']}", font=label_font,
+                          foreground=muted_color).pack(anchor="w")
                 num_schedules = len(valve_data.get('schedules', []))
-                sched_txt = f"⏰ {num_schedules} schedule(s) set" if num_schedules > 0 else "⏰ Not Scheduled"
-                sl = ttk.Label(info_frame, text=sched_txt, font=(info_font[0], info_font[1], "italic"), anchor="w", wraplength=180)
+                sched_txt = f"⏰ {num_schedules} schedule(s)" if num_schedules > 0 else "⏰ Not Scheduled"
+                sl = ttk.Label(info_frame, text=sched_txt,
+                               font=(info_font[0], info_font[1], "italic"),
+                               foreground=accent_color if num_schedules > 0 else muted_color,
+                               anchor="w", wraplength=190)
                 sl.pack(anchor="w", fill=tk.X)
                 utils.tooltip(sl, "Open Master Scheduler to view/edit schedules")
                 note = valve_data.get('note', '')
                 if note:
-                    nl = ttk.Label(info_frame, text=f"📝 {note[:25]}{'...' if len(note)>25 else ''}", font=(info_font[0], info_font[1], "italic"), foreground="#B0BEC5" if self.theme == "dark" else "#78909C", anchor="w")
+                    nl = ttk.Label(info_frame,
+                                   text=f"📝 {note[:28]}{'…' if len(note) > 28 else ''}",
+                                   font=(info_font[0], info_font[1], "italic"),
+                                   foreground=muted_color, anchor="w")
                     nl.pack(anchor="w", fill=tk.X)
                     utils.tooltip(nl, f"Note: {note}")
 
+                # Action buttons row
                 btns_frame = ttk.Frame(card, style=card_style.replace("Valve.Card", "T"))
-                btns_frame.pack(fill=tk.X, pady=(5, 0))
-                
-                remove_btn_state = "disabled" if self.is_config_locked.get() else "normal"
+                btns_frame.pack(fill=tk.X, pady=(4, 0))
 
+                remove_btn_state = "disabled" if self.is_config_locked.get() else "normal"
                 action_buttons = [
-                    ("✏️", lambda i=orig_idx: self.rename_valve(i), "Rename", "normal"), 
-                    ("🗑️", lambda i=orig_idx: self.remove_valve(i), "Remove", remove_btn_state),
-                    ("🔒" if not valve_data.get("locked") else "🔓", lambda i=orig_idx: self.toggle_lock(i), "Lock/Unlock", "normal"),
-                    ("📝", lambda i=orig_idx: self.edit_note(i), "Note", "normal"), 
-                    ("📋", lambda i=orig_idx: self.copy_valve(i), "Copy Cfg", "normal"),
-                    ("📈", lambda i=orig_idx: self.show_valve_history(i), "History", "normal"), 
-                    ("⚙️", lambda i=orig_idx: self.open_valve_settings_window(i), "Settings", "normal"),
-                    ("📊", lambda i=orig_idx: self.show_valve_stats(i), "Stats", "normal")
+                    ("✏️", lambda i=orig_idx: self.rename_valve(i),              "Rename",    "normal"),
+                    ("🗑️", lambda i=orig_idx: self.remove_valve(i),              "Remove",    remove_btn_state),
+                    ("🔒" if not is_locked else "🔓", lambda i=orig_idx: self.toggle_lock(i), "Lock/Unlock", "normal"),
+                    ("📝", lambda i=orig_idx: self.edit_note(i),                 "Note",      "normal"),
+                    ("📋", lambda i=orig_idx: self.copy_valve(i),                "Copy Cfg",  "normal"),
+                    ("📈", lambda i=orig_idx: self.show_valve_history(i),        "History",   "normal"),
+                    ("⚙️", lambda i=orig_idx: self.open_valve_settings_window(i),"Settings",  "normal"),
+                    ("📊", lambda i=orig_idx: self.show_valve_stats(i),          "Stats",     "normal"),
                 ]
                 for txt, cmd, tip, state in action_buttons:
-                    b = ttk.Button(btns_frame, text=txt, command=cmd, width=4, style="TButton", state=state)
+                    b = ttk.Button(btns_frame, text=txt, command=cmd, width=4,
+                                   style="TButton", state=state)
                     b.pack(side=tk.LEFT, padx=2, pady=2, fill=tk.X, expand=True)
                     utils.tooltip(b, tip)
 

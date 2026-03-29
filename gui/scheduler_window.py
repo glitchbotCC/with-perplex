@@ -66,90 +66,107 @@ class SchedulerWindow(tk.Toplevel):
 
     def _setup_scheduler_ui(self):
         """Sets up all UI components for the SchedulerWindow."""
-        main_frame = ttk.Frame(self, padding=15, style="TFrame")
+        main_frame = ttk.Frame(self, padding=(18, 16))
         main_frame.pack(fill=tk.BOTH, expand=True)
 
+        ttk.Label(main_frame, text="Master Scheduler", font=('Segoe UI Semibold', 13)).pack(anchor="w", pady=(0, 4))
+        ttk.Separator(main_frame, orient="horizontal").pack(fill=tk.X, pady=(0, 12))
+
         # --- Item Selection ---
-        item_frame = ttk.Frame(main_frame, style="TFrame", padding=(0, 0, 0, 10))
+        item_frame = ttk.Frame(main_frame, padding=(0, 0, 0, 10))
         item_frame.pack(fill=tk.X)
-        ttk.Label(item_frame, text="Item to Schedule:", style="TLabel").pack(side=tk.LEFT, padx=(0, 5))
-        self.item_combobox = ttk.Combobox(item_frame, textvariable=self.selected_item_display_name, width=45, state="readonly", style="TCombobox")
+        ttk.Label(item_frame, text="Item to Schedule:").pack(side=tk.LEFT, padx=(0, 8))
+        self.item_combobox = ttk.Combobox(item_frame, textvariable=self.selected_item_display_name,
+                                          width=45, state="readonly")
         self.item_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.item_combobox.bind("<<ComboboxSelected>>", self._on_item_selected_from_combobox)
 
         # --- Schedule Type Radio Buttons ---
-        type_frame = ttk.Frame(main_frame, style="TFrame", padding=(0, 0, 0, 10))
+        type_frame = ttk.Frame(main_frame, padding=(0, 0, 0, 10))
         type_frame.pack(fill=tk.X)
-        ttk.Label(type_frame, text="Schedule Type:", style="TLabel").pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Radiobutton(type_frame, text="Fixed Time Event", variable=self.schedule_type_var, value="Fixed Time", command=self._toggle_schedule_mode_ui, style="TRadiobutton").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(type_frame, text="Cycle/Interval", variable=self.schedule_type_var, value="Cycle", command=self._toggle_schedule_mode_ui, style="TRadiobutton").pack(side=tk.LEFT, padx=5)
+        ttk.Label(type_frame, text="Schedule Type:").pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Radiobutton(type_frame, text="Fixed Time Event",
+                        variable=self.schedule_type_var, value="Fixed Time",
+                        command=self._toggle_schedule_mode_ui).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Radiobutton(type_frame, text="Cycle / Interval",
+                        variable=self.schedule_type_var, value="Cycle",
+                        command=self._toggle_schedule_mode_ui).pack(side=tk.LEFT)
 
         # --- Fixed Time Frame ---
-        self.fixed_time_frame = ttk.Labelframe(main_frame, text="Fixed Time Event Details", style="Card.TFrame", padding=10)
-        ttk.Label(self.fixed_time_frame, text="Action:", style="TLabel").grid(row=0, column=0, padx=5, pady=8, sticky="w")
-        ttk.Radiobutton(self.fixed_time_frame, text="Turn ON", variable=self.schedule_action_var, value="ON", style="TRadiobutton").grid(row=0, column=1, padx=5, pady=8, sticky="w")
-        ttk.Radiobutton(self.fixed_time_frame, text="Turn OFF", variable=self.schedule_action_var, value="OFF", style="TRadiobutton").grid(row=0, column=2, padx=5, pady=8, sticky="w")
-        ttk.Label(self.fixed_time_frame, text="Time:", style="TLabel").grid(row=1, column=0, padx=5, pady=8, sticky="w")
-        self.time_entry = ttk.Entry(self.fixed_time_frame, textvariable=self.schedule_time_var, width=8, style="TEntry")
+        self.fixed_time_frame = ttk.Labelframe(main_frame, text="  Fixed Time Event  ", padding=12)
+        ttk.Label(self.fixed_time_frame, text="Action:").grid(row=0, column=0, padx=(0, 8), pady=8, sticky="w")
+        ttk.Radiobutton(self.fixed_time_frame, text="Turn ON",  variable=self.schedule_action_var, value="ON").grid(row=0, column=1, padx=5, pady=8, sticky="w")
+        ttk.Radiobutton(self.fixed_time_frame, text="Turn OFF", variable=self.schedule_action_var, value="OFF").grid(row=0, column=2, padx=5, pady=8, sticky="w")
+        ttk.Label(self.fixed_time_frame, text="Time:").grid(row=1, column=0, padx=(0, 8), pady=8, sticky="w")
+        self.time_entry = ttk.Entry(self.fixed_time_frame, textvariable=self.schedule_time_var, width=8)
         self.time_entry.grid(row=1, column=1, padx=5, pady=8, sticky="w")
-        self.time_preset_combobox = ttk.Combobox(self.fixed_time_frame, textvariable=self.time_preset_var, values=["Custom", "Sunrise", "Sunset"], width=10, state="readonly", style="TCombobox")
+        self.time_preset_combobox = ttk.Combobox(self.fixed_time_frame, textvariable=self.time_preset_var,
+                                                  values=["Custom", "Sunrise", "Sunset"], width=10, state="readonly")
         self.time_preset_combobox.grid(row=1, column=2, padx=5, pady=8, sticky="w")
         self.time_preset_combobox.bind("<<ComboboxSelected>>", self._update_time_from_preset)
-        self.fixed_time_skip_rain_check = ttk.Checkbutton(self.fixed_time_frame, text="Skip if Rainy", variable=self.skip_if_rainy_var, style="TCheckbutton")
-        self.fixed_time_skip_rain_check.grid(row=0, column=3, padx=10, pady=8, sticky="w")
+        self.fixed_time_skip_rain_check = ttk.Checkbutton(self.fixed_time_frame, text="Skip if Rainy",
+                                                           variable=self.skip_if_rainy_var)
+        self.fixed_time_skip_rain_check.grid(row=0, column=3, padx=(16, 0), pady=8, sticky="w")
         utils.tooltip(self.fixed_time_skip_rain_check, "If checked, this ON schedule will be skipped if live weather is 'Rainy' and global rain skip is enabled.")
 
         # --- Cycle Frame ---
-        self.cycle_frame = ttk.Labelframe(main_frame, text="Cycle/Interval Details", style="Card.TFrame", padding=10)
-        ttk.Label(self.cycle_frame, text="ON Duration (mins):", style="TLabel").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.cycle_on_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_on_duration_var, width=5, style="TEntry")
+        self.cycle_frame = ttk.Labelframe(main_frame, text="  Cycle / Interval Details  ", padding=12)
+        ttk.Label(self.cycle_frame, text="ON Duration (mins):").grid(row=0, column=0, padx=(0, 8), pady=5, sticky="w")
+        self.cycle_on_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_on_duration_var, width=5)
         self.cycle_on_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        ttk.Label(self.cycle_frame, text="OFF Duration (mins):", style="TLabel").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.cycle_off_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_off_duration_var, width=5, style="TEntry")
+        ttk.Label(self.cycle_frame, text="OFF Duration (mins):").grid(row=1, column=0, padx=(0, 8), pady=5, sticky="w")
+        self.cycle_off_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_off_duration_var, width=5)
         self.cycle_off_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-        ttk.Label(self.cycle_frame, text="Number of Cycles:", style="TLabel").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.cycle_count_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_count_var, width=5, style="TEntry")
+        ttk.Label(self.cycle_frame, text="Number of Cycles:").grid(row=2, column=0, padx=(0, 8), pady=5, sticky="w")
+        self.cycle_count_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_count_var, width=5)
         self.cycle_count_entry.grid(row=2, column=1, padx=5, pady=5, sticky="w")
         utils.tooltip(self.cycle_count_entry, "Enter a number (e.g., 3), or 0 for indefinite cycles.")
-        ttk.Label(self.cycle_frame, text="Cycle Start Time:", style="TLabel").grid(row=3, column=0, padx=5, pady=8, sticky="w")
-        self.cycle_start_time_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_start_time_var, width=8, style="TEntry")
+        ttk.Label(self.cycle_frame, text="Cycle Start Time:").grid(row=3, column=0, padx=(0, 8), pady=8, sticky="w")
+        self.cycle_start_time_entry = ttk.Entry(self.cycle_frame, textvariable=self.cycle_start_time_var, width=8)
         self.cycle_start_time_entry.grid(row=3, column=1, padx=5, pady=8, sticky="w")
-        self.cycle_time_preset_combobox = ttk.Combobox(self.cycle_frame, textvariable=self.cycle_time_preset_var, values=["Custom", "Sunrise", "Sunset"], width=10, state="readonly", style="TCombobox")
+        self.cycle_time_preset_combobox = ttk.Combobox(self.cycle_frame, textvariable=self.cycle_time_preset_var,
+                                                        values=["Custom", "Sunrise", "Sunset"], width=10, state="readonly")
         self.cycle_time_preset_combobox.grid(row=3, column=2, padx=5, pady=8, sticky="w")
         self.cycle_time_preset_combobox.bind("<<ComboboxSelected>>", self._update_time_from_preset)
-        self.cycle_skip_rain_check = ttk.Checkbutton(self.cycle_frame, text="Skip if Rainy", variable=self.cycle_skip_if_rainy_var, style="TCheckbutton")
-        self.cycle_skip_rain_check.grid(row=0, column=2, rowspan=2, padx=10, pady=5, sticky="w")
+        self.cycle_skip_rain_check = ttk.Checkbutton(self.cycle_frame, text="Skip if Rainy",
+                                                      variable=self.cycle_skip_if_rainy_var)
+        self.cycle_skip_rain_check.grid(row=0, column=2, rowspan=2, padx=(16, 0), pady=5, sticky="w")
         utils.tooltip(self.cycle_skip_rain_check, "If checked, this cycle schedule will be skipped if live weather is 'Rainy' and global rain skip is enabled.")
 
         # --- Action Buttons ---
-        action_button_frame = ttk.Frame(main_frame, style="TFrame", padding=(0, 10, 0, 0))
+        action_button_frame = ttk.Frame(main_frame, padding=(0, 10, 0, 0))
         action_button_frame.pack(fill=tk.X)
-        self.add_update_btn = ttk.Button(action_button_frame, text="💾 Add Schedule", command=self._set_or_update_schedule, style="Accent.TButton", compound=tk.LEFT)
-        self.add_update_btn.pack(side=tk.LEFT, padx=(0, 5), fill=tk.X, expand=True)
-        new_btn = ttk.Button(action_button_frame, text="➕ New", command=self._reset_fields_for_new_schedule, style="TButton", compound=tk.LEFT)
-        new_btn.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.add_update_btn = ttk.Button(action_button_frame, text="💾  Add Schedule",
+                                         command=self._set_or_update_schedule, style="Accent.TButton")
+        self.add_update_btn.pack(side=tk.LEFT, padx=(0, 4), fill=tk.X, expand=True)
+        new_btn = ttk.Button(action_button_frame, text="➕  New",
+                             command=self._reset_fields_for_new_schedule, style="TButton")
+        new_btn.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
         utils.tooltip(new_btn, "Clear fields to create a new schedule.")
-        clear_all_btn = ttk.Button(action_button_frame, text="🗑️ Clear All for Item", command=self._clear_all_schedules_for_selected_item, style="TButton", compound=tk.LEFT)
-        clear_all_btn.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        clear_all_btn = ttk.Button(action_button_frame, text="🗑️  Clear All for Item",
+                                   command=self._clear_all_schedules_for_selected_item, style="TButton")
+        clear_all_btn.pack(side=tk.LEFT, padx=4, fill=tk.X, expand=True)
         utils.tooltip(clear_all_btn, "Clears all schedules for the item selected in the dropdown.")
 
         # --- Paned Window for Lists ---
-        schedule_panes = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL, style="TPanedwindow")
-        schedule_panes.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
+        schedule_panes = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        schedule_panes.pack(fill=tk.BOTH, expand=True, pady=(14, 0))
 
         # --- Current Schedules List ---
-        current_frame = ttk.Labelframe(schedule_panes, text="Current Schedules (Select to Edit, Press Delete to Clear)", style="Card.TFrame", padding=10)
+        current_frame = ttk.Labelframe(schedule_panes, text="  Current Schedules  ", padding=10)
         schedule_panes.add(current_frame, weight=1)
         current_frame.rowconfigure(0, weight=1)
         current_frame.columnconfigure(0, weight=1)
-        self.current_schedules_tree = ttk.Treeview(current_frame, columns=("item", "type", "details"), show="headings", style="Treeview")
-        self.current_schedules_tree.heading("item", text="Item Name")
-        self.current_schedules_tree.heading("type", text="Type")
+        self.current_schedules_tree = ttk.Treeview(current_frame,
+                                                    columns=("item", "type", "details"),
+                                                    show="headings")
+        self.current_schedules_tree.heading("item",    text="Item Name")
+        self.current_schedules_tree.heading("type",    text="Type")
         self.current_schedules_tree.heading("details", text="Schedule Details")
-        self.current_schedules_tree.column("item", width=150, anchor="w")
-        self.current_schedules_tree.column("type", width=80, anchor="center")
+        self.current_schedules_tree.column("item",    width=150, anchor="w")
+        self.current_schedules_tree.column("type",    width=80,  anchor="center")
         self.current_schedules_tree.column("details", width=250, anchor="w")
-        current_ysb = ttk.Scrollbar(current_frame, orient="vertical", command=self.current_schedules_tree.yview)
+        current_ysb = ttk.Scrollbar(current_frame, orient="vertical",   command=self.current_schedules_tree.yview)
         current_xsb = ttk.Scrollbar(current_frame, orient="horizontal", command=self.current_schedules_tree.xview)
         self.current_schedules_tree.configure(yscrollcommand=current_ysb.set, xscrollcommand=current_xsb.set)
         self.current_schedules_tree.grid(row=0, column=0, sticky="nsew")
@@ -159,24 +176,27 @@ class SchedulerWindow(tk.Toplevel):
         self.current_schedules_tree.bind("<<TreeviewSelect>>", self._load_schedule_for_editing)
 
         # --- History List ---
-        history_frame = ttk.Labelframe(schedule_panes, text="Execution History", style="Card.TFrame", padding=10)
+        history_frame = ttk.Labelframe(schedule_panes, text="  Execution History  ", padding=10)
         schedule_panes.add(history_frame, weight=1)
         history_frame.rowconfigure(0, weight=1)
         history_frame.columnconfigure(0, weight=1)
-        self.history_schedules_tree = ttk.Treeview(history_frame, columns=("time", "item", "details"), show="headings", style="Treeview")
-        self.history_schedules_tree.heading("time", text="Executed At")
-        self.history_schedules_tree.heading("item", text="Item Name")
+        self.history_schedules_tree = ttk.Treeview(history_frame,
+                                                    columns=("time", "item", "details"),
+                                                    show="headings")
+        self.history_schedules_tree.heading("time",    text="Executed At")
+        self.history_schedules_tree.heading("item",    text="Item Name")
         self.history_schedules_tree.heading("details", text="Executed Schedule")
-        self.history_schedules_tree.column("time", width=120, anchor="w")
-        self.history_schedules_tree.column("item", width=120, anchor="w")
+        self.history_schedules_tree.column("time",    width=120, anchor="w")
+        self.history_schedules_tree.column("item",    width=120, anchor="w")
         self.history_schedules_tree.column("details", width=200, anchor="w")
-        history_ysb = ttk.Scrollbar(history_frame, orient="vertical", command=self.history_schedules_tree.yview)
+        history_ysb = ttk.Scrollbar(history_frame, orient="vertical",   command=self.history_schedules_tree.yview)
         history_xsb = ttk.Scrollbar(history_frame, orient="horizontal", command=self.history_schedules_tree.xview)
         self.history_schedules_tree.configure(yscrollcommand=history_ysb.set, xscrollcommand=history_xsb.set)
         self.history_schedules_tree.grid(row=0, column=0, sticky="nsew")
         history_ysb.grid(row=0, column=1, sticky="ns")
         history_xsb.grid(row=1, column=0, sticky="ew")
-        clear_history_btn = ttk.Button(history_frame, text="Clear History List", command=self._clear_all_history_schedules, style="TButton")
+        clear_history_btn = ttk.Button(history_frame, text="🗑️  Clear History",
+                                       command=self._clear_all_history_schedules, style="TButton")
         clear_history_btn.grid(row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
         utils.tooltip(clear_history_btn, "Clears all executed schedules from the history list above.")
 

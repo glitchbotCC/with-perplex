@@ -12,7 +12,7 @@ class AppSettingsWindow(tk.Toplevel):
         self.master_app = master_app
         self.transient(master_app.root)
         self.title("⚙️ Application Settings")
-        self.geometry("500x300")
+        self.geometry("520x330")
         self.resizable(False, False)
         self.grab_set()
 
@@ -26,34 +26,46 @@ class AppSettingsWindow(tk.Toplevel):
 
     def _setup_ui(self):
         """Sets up the UI components (labels, entries, buttons) for the AppSettingsWindow."""
-        main_frame = ttk.Frame(self, padding=20, style="TFrame")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        wrapper = ttk.Frame(self, padding=(24, 20))
+        wrapper.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Manual Sunrise Time (HH:MM):", style="TLabel").grid(row=0, column=0, padx=5, pady=8, sticky="w")
-        self.sunrise_entry = ttk.Entry(main_frame, textvariable=self.sunrise_var, width=10, style="TEntry")
-        self.sunrise_entry.grid(row=0, column=1, padx=5, pady=8, sticky="ew")
+        ttk.Label(wrapper, text="Application Settings", font=('Segoe UI Semibold', 13)).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        ttk.Separator(wrapper, orient="horizontal").grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+
+        ttk.Label(wrapper, text="Manual Sunrise Time (HH:MM):").grid(
+            row=2, column=0, padx=(0, 12), pady=8, sticky="w")
+        self.sunrise_entry = ttk.Entry(wrapper, textvariable=self.sunrise_var, width=10)
+        self.sunrise_entry.grid(row=2, column=1, pady=8, sticky="ew")
         utils.tooltip(self.sunrise_entry, "Set a fallback time for 'Sunrise' if the API fails.")
 
-        ttk.Label(main_frame, text="Manual Sunset Time (HH:MM):", style="TLabel").grid(row=1, column=0, padx=5, pady=8, sticky="w")
-        self.sunset_entry = ttk.Entry(main_frame, textvariable=self.sunset_var, width=10, style="TEntry")
-        self.sunset_entry.grid(row=1, column=1, padx=5, pady=8, sticky="ew")
+        ttk.Label(wrapper, text="Manual Sunset Time (HH:MM):").grid(
+            row=3, column=0, padx=(0, 12), pady=8, sticky="w")
+        self.sunset_entry = ttk.Entry(wrapper, textvariable=self.sunset_var, width=10)
+        self.sunset_entry.grid(row=3, column=1, pady=8, sticky="ew")
         utils.tooltip(self.sunset_entry, "Set a fallback time for 'Sunset' if the API fails.")
 
-        ttk.Label(main_frame, text="(Sunrise/Sunset are now set automatically by location)", font=('Segoe UI', 8, 'italic')).grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        ttk.Label(wrapper,
+                  text="(Sunrise/Sunset are set automatically by location)",
+                  font=('Segoe UI', 8, 'italic')).grid(
+            row=4, column=0, columnspan=2, pady=(0, 12), sticky="w")
 
-        self.rain_skip_check = ttk.Checkbutton(main_frame, text="Enable Rain Skip for Schedules", variable=self.enable_rain_skip_var, style="TCheckbutton")
-        self.rain_skip_check.grid(row=3, column=0, columnspan=2, padx=5, pady=10, sticky="w")
+        self.rain_skip_check = ttk.Checkbutton(
+            wrapper, text="Enable Rain Skip for Schedules",
+            variable=self.enable_rain_skip_var)
+        self.rain_skip_check.grid(row=5, column=0, columnspan=2, pady=8, sticky="w")
         utils.tooltip(self.rain_skip_check, "If checked, schedules will not run if live weather is 'Rainy'.")
 
-        main_frame.columnconfigure(1, weight=1)
+        wrapper.columnconfigure(1, weight=1)
 
-        button_frame = ttk.Frame(main_frame, style="TFrame")
-        button_frame.grid(row=4, column=0, columnspan=2, pady=20, sticky="ew")
+        button_frame = ttk.Frame(wrapper)
+        button_frame.grid(row=6, column=0, columnspan=2, pady=(20, 0), sticky="ew")
 
-        save_btn = ttk.Button(button_frame, text="💾 Save Settings", command=self._save_app_settings, style="Accent.TButton", compound=tk.LEFT)
-        save_btn.pack(side=tk.RIGHT, padx=5)
-        cancel_btn = ttk.Button(button_frame, text="Cancel", command=self.destroy, style="TButton")
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="💾  Save Settings",
+                   command=self._save_app_settings, style="Accent.TButton").pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(button_frame, text="Cancel",
+                   command=self.destroy, style="TButton").pack(side=tk.RIGHT)
 
     def _validate_time_format(self, time_str):
         """Validates if the given string is in HH:MM format."""
@@ -92,7 +104,7 @@ class ValveSettingsWindow(tk.Toplevel):
 
         self.transient(master_app.root)
         self.title(f"⚙️ Settings: {self.valve_data['name']}")
-        self.geometry("400x200")
+        self.geometry("420x220")
         self.resizable(False, False)
         self.grab_set()
 
@@ -105,25 +117,28 @@ class ValveSettingsWindow(tk.Toplevel):
 
     def _setup_ui(self):
         """Sets up UI components for the ValveSettingsWindow."""
-        main_frame = ttk.Frame(self, padding=20, style="TFrame")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        wrapper = ttk.Frame(self, padding=(24, 20))
+        wrapper.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text=f"Settings for Valve: {self.valve_data['name']}", style="TLabel", font=('Segoe UI', 11, 'bold')).pack(pady=(0, 15))
+        ttk.Label(wrapper, text=f"Valve: {self.valve_data['name']}",
+                  font=('Segoe UI Semibold', 12)).pack(anchor="w", pady=(0, 4))
+        ttk.Separator(wrapper, orient="horizontal").pack(fill=tk.X, pady=(0, 16))
 
-        flow_frame = ttk.Frame(main_frame, style="TFrame")
-        flow_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(flow_frame, text="Est. Flow Rate (Liters/Min):", style="TLabel").pack(side=tk.LEFT, padx=(0, 10))
-        self.flow_rate_entry = ttk.Entry(flow_frame, textvariable=self.flow_rate_var, width=10, style="TEntry")
+        flow_frame = ttk.Frame(wrapper)
+        flow_frame.pack(fill=tk.X, pady=4)
+        ttk.Label(flow_frame, text="Est. Flow Rate (L/min):").pack(side=tk.LEFT, padx=(0, 12))
+        self.flow_rate_entry = ttk.Entry(flow_frame, textvariable=self.flow_rate_var, width=10)
         self.flow_rate_entry.pack(side=tk.LEFT)
-        utils.tooltip(self.flow_rate_entry, "Enter the estimated flow rate for this valve (e.g., 10.5) to track water usage.")
+        utils.tooltip(self.flow_rate_entry,
+                      "Enter the estimated flow rate for this valve (e.g., 10.5) to track water usage.")
 
-        button_frame = ttk.Frame(main_frame, style="TFrame")
-        button_frame.pack(pady=20, fill=tk.X, side=tk.BOTTOM)
+        button_frame = ttk.Frame(wrapper)
+        button_frame.pack(pady=(20, 0), fill=tk.X, side=tk.BOTTOM)
 
-        save_btn = ttk.Button(button_frame, text="💾 Save", command=self._save_valve_settings, style="Accent.TButton", compound=tk.LEFT)
-        save_btn.pack(side=tk.RIGHT, padx=5)
-        cancel_btn = ttk.Button(button_frame, text="Cancel", command=self.destroy, style="TButton")
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="💾  Save",
+                   command=self._save_valve_settings, style="Accent.TButton").pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(button_frame, text="Cancel",
+                   command=self.destroy, style="TButton").pack(side=tk.RIGHT)
 
     def _save_valve_settings(self):
         """Validates and saves the valve-specific settings."""
