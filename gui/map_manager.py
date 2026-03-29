@@ -5,7 +5,10 @@ import math
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from PIL import Image, ImageTk
-from .. import constants
+try:
+    from .. import constants
+except ImportError:
+    import constants
 
 
 class AssignValveDialog(tk.Toplevel):

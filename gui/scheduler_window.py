@@ -5,7 +5,10 @@ from tkinter import ttk, messagebox
 import datetime
 import time
 import random
-from .. import utils
+try:
+    from .. import utils
+except ImportError:
+    import utils
 
 class SchedulerWindow(tk.Toplevel):
     """

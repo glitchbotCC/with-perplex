@@ -3,8 +3,12 @@
 import copy
 import json
 import os
-from . import utils
-from . import constants
+try:
+    from . import utils
+    from . import constants
+except ImportError:
+    import utils
+    import constants
 
 class PersistentSettings:
     """ Handles loading and saving of application settings to a JSON file. """

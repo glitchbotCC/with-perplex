@@ -5,7 +5,10 @@ import datetime
 import time
 import tkinter as tk
 from tkinter import simpledialog, messagebox
-from .. import constants, utils
+try:
+    from .. import constants, utils
+except ImportError:
+    import constants, utils
 
 
 class ValveManagerMixin:

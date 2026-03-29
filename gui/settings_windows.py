@@ -3,7 +3,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import datetime
-from .. import utils
+try:
+    from .. import utils
+except ImportError:
+    import utils
 
 class AppSettingsWindow(tk.Toplevel):
     """A Toplevel window for managing application-wide settings like virtual sunrise/sunset and weather simulation."""

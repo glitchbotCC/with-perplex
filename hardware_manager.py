@@ -1,7 +1,10 @@
 # smart_farm/hardware_manager.py
 
 import random
-from . import constants
+try:
+    from . import constants
+except ImportError:
+    import constants
 
 # --- Raspberry Pi GPIO and Sensor Integration ---
 IS_RASPBERRY_PI = False

@@ -4,7 +4,10 @@ import datetime
 import time
 import random
 import tkinter as tk
-from .. import constants, utils
+try:
+    from .. import constants, utils
+except ImportError:
+    import constants, utils
 
 
 class SchedulerManagerMixin:

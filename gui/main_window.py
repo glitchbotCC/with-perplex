@@ -18,9 +18,14 @@ from queue import Queue
 
 
 # Local application imports
-from .. import constants, utils
-from ..settings_manager import PersistentSettings
-from ..hardware_manager import HardwareManager
+try:
+    from .. import constants, utils
+    from ..settings_manager import PersistentSettings
+    from ..hardware_manager import HardwareManager
+except ImportError:
+    import constants, utils
+    from settings_manager import PersistentSettings
+    from hardware_manager import HardwareManager
 from .mqtt_manager import MqttManager
 
 # GUI window imports
