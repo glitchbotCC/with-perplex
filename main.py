@@ -1,7 +1,7 @@
 # smart_farm/main.py
 
 import tkinter as tk
-from .gui.main_window import MainWindow
+from gui.main_window import MainWindow
 
 def start_app():
     """Initializes and runs the Smart Farm application."""
